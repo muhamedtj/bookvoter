@@ -1,3 +1,4 @@
+import sqlite3
 import aiosqlite
 import logging
 from typing import Optional, List, Dict, Any
@@ -94,7 +95,10 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
         async with db.execute("PRAGMA table_info(backlog_ratings)") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
             if "created_at" not in columns:
-                await db.execute("ALTER TABLE backlog_ratings ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+                try:
+                    await db.execute("ALTER TABLE backlog_ratings ADD COLUMN created_at TIMESTAMP;")
+                except (sqlite3.OperationalError, aiosqlite.OperationalError, Exception) as e:
+                    logger.warning(f"Failed or skipped adding created_at column to backlog_ratings: {e}")
 
         await db.commit()
 
