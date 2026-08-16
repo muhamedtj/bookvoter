@@ -974,15 +974,17 @@ async def finish_vote_process(chat_id: int):
         parse_mode="Markdown"
     )
 
-    await execute_downloader_and_send(chat_id, winning_book_id, win_title, lang)
+    query_str = f"{win_title} {win_author}".strip() if win_author and win_author.lower() != "n/a" else win_title
+    await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
 
 
-async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, lang: str):
+async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, query_str: str, lang: str):
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             "downloader.py",
-            book_title,
+            "download",
+            query_str,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )

@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import json
 import asyncio
 import logging
@@ -196,6 +197,7 @@ async def search_and_download(title: str) -> None:
             if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
                 continue
 
+            # Case A: Reply has inline button for download/selection
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 try:
                     first_button = message.reply_markup.inline_keyboard[0][0]
@@ -209,6 +211,19 @@ async def search_and_download(title: str) -> None:
                 except Exception as cb_err:
                     logging.warning(f"Failed to trigger inline button: {cb_err}")
 
+            # Case B: Message contains text list with download command (e.g., /download_123 or /get_456 or /d_789)
+            if msg_text and not message.document:
+                # Find download command pattern like /download_... or /dl_... or /get_... or /d_...
+                cmd_match = re.search(r"/(?:download|get|dl|d)_[a_zA_Z0_9_]+", msg_text)
+                if cmd_match:
+                    dl_cmd = cmd_match.group(0)
+                    try:
+                        cmd_msg = await app.send_message(target_channel, dl_cmd)
+                        await asyncio.sleep(4)
+                    except Exception as cmd_err:
+                        logging.warning(f"Failed to send download command {dl_cmd}: {cmd_err}")
+
+            # Check direct document attached to message
             if message.document:
                 file_name = message.document.file_name or ""
                 ext = os.path.splitext(file_name)[1].lower()
