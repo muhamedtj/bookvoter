@@ -115,6 +115,17 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
 
         hof_data_2 = await database.get_hall_of_fame_detailed(self.db_path, chat_id=-300, min_votes=2)
         self.assertEqual(len(hof_data_2["qualified"]), 1)
+        self.assertEqual(hof_data_2["qualified"][0]["avg_score"], 9.0)
+        # Check weighted rating calculation
+        self.assertIn("weighted_rating", hof_data_2["qualified"][0])
+
+        # Test soft delete / hide from Hall of Fame
+        hidden = await database.hide_book_from_hall_of_fame(self.db_path, b_id, chat_id=-300)
+        self.assertTrue(hidden)
+
+        hof_data_3 = await database.get_hall_of_fame_detailed(self.db_path, chat_id=-300, min_votes=2)
+        self.assertEqual(len(hof_data_3["qualified"]), 0)
+        self.assertEqual(len(hof_data_3["low_votes"]), 0)
 
 if __name__ == "__main__":
     unittest.main()

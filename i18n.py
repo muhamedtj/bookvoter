@@ -292,8 +292,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Зафиксировано: Не читал"
     },
     "hof_header": {
-        "en": "🏆 **Hall of Fame (Provisional Top)**\nSorted by average reading score:\n\n",
-        "ru": "🏆 **Зал славы (Топ прочитанных книг)**\nОтсортировано по средней оценке за прочтение:\n\n"
+        "en": "🏆 **Hall of Fame (Smart Weighted Rating)**\nSorted by Bayesian Weighted Rating (WR):\n\n",
+        "ru": "🏆 **Зал славы (Умный рейтинг)**\nОтсортировано по взвешенному рейтингу:\n\n"
     },
     "hof_low_votes_header": {
         "en": "\n\n⚠️ **Low Votes (< {min_votes} votes):**\n",
@@ -304,8 +304,32 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "🏆 Зал славы пока пуст."
     },
     "hof_item_format": {
-        "en": "{idx}. **{title}** ({author}) — ⭐ **{score}** (based on {count} votes)",
-        "ru": "{idx}. **{title}** ({author}) — ⭐ **{score}** (на основе {count} голосов)"
+        "en": "{idx}. **{title}** ({author}) — ⭐ **WR: {wr}** | Avg: **{score}** ({count} votes)",
+        "ru": "{idx}. **{title}** ({author}) — ⭐ **Рейтинг: {wr}** | Средний балл: **{score}** (на основе {count} голосов)"
+    },
+    "btn_hof_delete_book": {
+        "en": "🗑️ Delete Book from Hall of Fame",
+        "ru": "🗑️ Удалить книгу из Зала славы"
+    },
+    "select_hof_book_to_delete": {
+        "en": "🗑️ **Select a book to remove from Hall of Fame:**",
+        "ru": "🗑️ **Выберите книгу для удаления из Зала славы:**"
+    },
+    "hof_confirm_delete_prompt": {
+        "en": "❓ Are you sure you want to remove **{title}** from the Hall of Fame?",
+        "ru": "❓ Вы уверены, что хотите удалить книгу **{title}** из Зала славы?"
+    },
+    "btn_confirm_yes": {
+        "en": "✅ Yes, delete",
+        "ru": "✅ Да, удалить"
+    },
+    "btn_confirm_cancel": {
+        "en": "❌ Cancel",
+        "ru": "❌ Отмена"
+    },
+    "hof_deleted_success": {
+        "en": "✅ Book **{title}** removed from Hall of Fame.",
+        "ru": "✅ Книга **{title}** была удалена из Зала славы."
     },
     "hof_title": {
         "en": "🏆 **Hall of Fame Updated!**\n\n",

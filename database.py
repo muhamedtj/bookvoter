@@ -81,6 +81,7 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
                 chat_id INTEGER NOT NULL,
                 final_club_rating REAL,
                 votes_count INTEGER DEFAULT 0,
+                is_hidden INTEGER DEFAULT 0,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE,
                 FOREIGN KEY (chat_id) REFERENCES chats (chat_id) ON DELETE CASCADE
@@ -121,6 +122,11 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
                     await db.execute("ALTER TABLE hall_of_fame ADD COLUMN votes_count INTEGER DEFAULT 0;")
                 except (sqlite3.OperationalError, aiosqlite.OperationalError, Exception) as e:
                     logger.warning(f"Failed or skipped adding votes_count column to hall_of_fame: {e}")
+            if "is_hidden" not in columns:
+                try:
+                    await db.execute("ALTER TABLE hall_of_fame ADD COLUMN is_hidden INTEGER DEFAULT 0;")
+                except (sqlite3.OperationalError, aiosqlite.OperationalError, Exception) as e:
+                    logger.warning(f"Failed or skipped adding is_hidden column to hall_of_fame: {e}")
 
         await db.commit()
 
@@ -527,13 +533,37 @@ async def add_to_hall_of_fame(db_path: str, book_id: int, chat_id: int, final_ra
         await db.commit()
 
 
+async def hide_book_from_hall_of_fame(db_path: str, book_id: int, chat_id: int) -> bool:
+    """Soft delete / hide a book from Hall of Fame for a chat."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("""
+            UPDATE hall_of_fame SET is_hidden = 1 WHERE book_id = ? AND chat_id = ?
+        """, (book_id, chat_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
 async def get_hall_of_fame_detailed(db_path: str, chat_id: int, min_votes: int = 3) -> Dict[str, List[Dict[str, Any]]]:
     """
     Get Hall of Fame books for a chat split into qualified (>= min_votes) and low_votes (< min_votes).
-    Calculates live average read_score and votes count.
+    Calculates live average read_score (R), vote count (v), global club average (C), and Bayesian Weighted Rating (WR):
+    WR = (v / (v + m)) * R + (m / (v + m)) * C
     """
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
+
+        # Calculate C: Mean average score across all read_ratings in this chat
+        async with db.execute("""
+            SELECT COALESCE(AVG(r.score), 7.0)
+            FROM read_ratings r
+            JOIN books b ON r.book_id = b.id
+            JOIN hall_of_fame h ON b.id = h.book_id
+            WHERE h.chat_id = ? AND h.is_hidden = 0 AND r.score IS NOT NULL AND r.score >= 1
+        """, (chat_id,)) as cursor:
+            global_avg_c = (await cursor.fetchone())[0]
+            if not global_avg_c:
+                global_avg_c = 7.0
+
         async with db.execute("""
             SELECT b.id, b.title, b.author, b.genre, h.completed_at,
                    COALESCE(AVG(r.score), h.final_club_rating, 0) as avg_score,
@@ -541,20 +571,38 @@ async def get_hall_of_fame_detailed(db_path: str, chat_id: int, min_votes: int =
             FROM hall_of_fame h
             JOIN books b ON h.book_id = b.id
             LEFT JOIN read_ratings r ON b.id = r.book_id AND r.score IS NOT NULL AND r.score >= 1
-            WHERE h.chat_id = ?
+            WHERE h.chat_id = ? AND h.is_hidden = 0
             GROUP BY b.id
-            ORDER BY avg_score DESC, live_votes_count DESC, b.id ASC
         """, (chat_id,)) as cursor:
             rows = [dict(r) for r in await cursor.fetchall()]
+
+        m = float(min_votes)
+        c = float(global_avg_c)
 
         qualified = []
         low_votes = []
         for r in rows:
-            r["avg_score"] = round(r["avg_score"], 2)
+            v = float(r["live_votes_count"])
+            avg_r = float(r["avg_score"])
+
+            # Bayesian Weighted Rating
+            if v > 0:
+                weighted_rating = (v / (v + m)) * avg_r + (m / (v + m)) * c
+            else:
+                weighted_rating = c
+
+            r["avg_score"] = round(avg_r, 2)
+            r["weighted_rating"] = round(weighted_rating, 2)
+
             if r["live_votes_count"] >= min_votes:
                 qualified.append(r)
             else:
                 low_votes.append(r)
+
+        # Sort qualified books by weighted rating (WR) descending
+        qualified.sort(key=lambda x: (x["weighted_rating"], x["live_votes_count"], x["avg_score"]), reverse=True)
+        # Sort low votes books by average score descending
+        low_votes.sort(key=lambda x: (x["avg_score"], x["live_votes_count"]), reverse=True)
 
         return {"qualified": qualified, "low_votes": low_votes}
 

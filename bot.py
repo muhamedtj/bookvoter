@@ -1031,10 +1031,20 @@ async def handle_halloffame_command(message: Message):
     await send_halloffame_response(message.chat.id, lang, target_msg_or_cb=message)
 
 
-async def send_halloffame_response(chat_id: int, lang: str, target_msg_or_cb: Any):
+async def send_halloffame_response(chat_id: int, lang: str, target_msg_or_cb: Any, user_id: Optional[int] = None):
     data = await database.get_hall_of_fame_detailed(DATABASE_PATH, chat_id, min_votes=MIN_VOTES_FOR_RATING)
     qualified = data["qualified"]
     low_votes = data["low_votes"]
+
+    user_is_admin = False
+    if user_id:
+        user_is_admin = await is_admin(chat_id, user_id)
+
+    markup = None
+    if user_is_admin and (qualified or low_votes):
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_hof_delete_book", lang), callback_data="hof_del_menu")]
+        ])
 
     if not qualified and not low_votes:
         text = t("hof_empty", lang)
@@ -1047,19 +1057,100 @@ async def send_halloffame_response(chat_id: int, lang: str, target_msg_or_cb: An
     text = t("hof_header", lang)
     if qualified:
         for idx, item in enumerate(qualified, 1):
-            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
     else:
         text += "—\n"
 
     if low_votes:
         text += t("hof_low_votes_header", lang, min_votes=MIN_VOTES_FOR_RATING)
         for idx, item in enumerate(low_votes, 1):
-            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
 
     if isinstance(target_msg_or_cb, Message):
-        await target_msg_or_cb.answer(text, parse_mode="Markdown")
+        await target_msg_or_cb.answer(text, parse_mode="Markdown", reply_markup=markup)
     elif isinstance(target_msg_or_cb, CallbackQuery):
-        await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown")
+        await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data == "hof_del_menu")
+async def handle_hof_del_menu(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    data = await database.get_hall_of_fame_detailed(DATABASE_PATH, chat_id, min_votes=MIN_VOTES_FOR_RATING)
+    all_hof_books = data["qualified"] + data["low_votes"]
+
+    if not all_hof_books:
+        await callback.answer(t("hof_empty", lang), show_alert=True)
+        return
+
+    keyboard = []
+    for b in all_hof_books:
+        btn_text = f"❌ {b['title'][:25]} ({b['author'][:15]})"
+        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"hof_del_confirm:{b['id']}")])
+
+    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="hof_refresh")])
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    await callback.answer()
+    await callback.message.edit_text(t("select_hof_book_to_delete", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data == "hof_refresh")
+async def handle_hof_refresh(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    await callback.answer()
+    await send_halloffame_response(chat_id, lang, target_msg_or_cb=callback, user_id=callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("hof_del_confirm:"))
+async def handle_hof_del_confirm(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    book_id = int(callback.data.split(":")[1])
+    book = await database.get_book_by_id(DATABASE_PATH, book_id)
+    book_title = book["title"] if book else f"#{book_id}"
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=t("btn_confirm_yes", lang), callback_data=f"hof_del_do:{book_id}"),
+            InlineKeyboardButton(text=t("btn_confirm_cancel", lang), callback_data="hof_del_menu")
+        ]
+    ])
+
+    await callback.answer()
+    await callback.message.edit_text(
+        t("hof_confirm_delete_prompt", lang, title=book_title),
+        parse_mode="Markdown",
+        reply_markup=markup
+    )
+
+
+@router.callback_query(F.data.startswith("hof_del_do:"))
+async def handle_hof_del_do(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    book_id = int(callback.data.split(":")[1])
+    book = await database.get_book_by_id(DATABASE_PATH, book_id)
+    book_title = book["title"] if book else f"#{book_id}"
+
+    await database.hide_book_from_hall_of_fame(DATABASE_PATH, book_id, chat_id)
+    await callback.answer(t("hof_deleted_success", lang, title=book_title), show_alert=True)
+
+    # Automatically refresh Hall of Fame with recalculated Bayesian ratings
+    await send_halloffame_response(chat_id, lang, target_msg_or_cb=callback, user_id=callback.from_user.id)
 
 
 @router.callback_query(F.data == "admin_finish_reading")
