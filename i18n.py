@@ -95,6 +95,38 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "✅ **Book Added to Backlog!**",
         "ru": "✅ **Книга добавлена в бэклог!**"
     },
+    "book_added_confirmation_exact": {
+        "en": "✅ Book **{title}** (**{author}**) successfully added to backlog!",
+        "ru": "✅ Книга **{title}** (**{author}**) успешно добавлена в бэклог!"
+    },
+    "select_genre_prompt": {
+        "en": "🏷️ Please select a genre for **{title}** ({author}):",
+        "ru": "🏷️ Пожалуйста, выберите жанр для книги **{title}** ({author}):"
+    },
+    "genre_scifi": {
+        "en": "🚀 Sci-Fi / Fantasy",
+        "ru": "🚀 Фантастика / Фэнтези"
+    },
+    "genre_classics": {
+        "en": "🏛️ Classics",
+        "ru": "🏛️ Классика"
+    },
+    "genre_business": {
+        "en": "💼 Business / Economics",
+        "ru": "💼 Бизнес / Экономика"
+    },
+    "genre_detective": {
+        "en": "🔍 Detective / Thriller",
+        "ru": "🔍 Детектив / Триллер"
+    },
+    "genre_nonfiction": {
+        "en": "🧠 Non-Fiction / Science",
+        "ru": "🧠 Научпоп / Нон-фикшн"
+    },
+    "genre_other": {
+        "en": "📚 Other / General",
+        "ru": "📚 Прочее / Другое"
+    },
     "book_field_title": {
         "en": "📖 **Title:** {title}",
         "ru": "📖 **Название:** {title}"

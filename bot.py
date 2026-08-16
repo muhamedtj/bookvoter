@@ -344,7 +344,8 @@ async def handle_suggest(message: Message, command: CommandObject):
 
     inline_keyboard = []
     for idx, b in enumerate(books):
-        btn_text = f"📖 {b['title'][:35]}"
+        label_author = f" ({b['author'][:20]})" if b.get('author') and b['author'].lower() != 'unknown author' else ""
+        btn_text = f"📖 {b['title'][:30]}{label_author}"
         inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"sel_sug:{temp_key}:{idx}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -387,6 +388,36 @@ async def handle_suggestion_select(callback: CallbackQuery):
         await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
         return
 
+    # If genre is missing or empty, ask user to select a genre via inline buttons
+    if not selected_book.get("genre") or selected_book["genre"].strip().lower() in ["general", "без жанра", ""]:
+        # Save selection details in pending_genre_selections
+        genre_key = f"gen_{chat_id}_{user_id}_{int(datetime.now().timestamp())}"
+        pending_genre_selections[genre_key] = selected_book
+        pending_suggestions.pop(temp_key, None)
+
+        genre_markup = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text=t("genre_scifi", lang), callback_data=f"set_gen:{genre_key}:Sci-Fi"),
+                InlineKeyboardButton(text=t("genre_classics", lang), callback_data=f"set_gen:{genre_key}:Classics")
+            ],
+            [
+                InlineKeyboardButton(text=t("genre_business", lang), callback_data=f"set_gen:{genre_key}:Business"),
+                InlineKeyboardButton(text=t("genre_detective", lang), callback_data=f"set_gen:{genre_key}:Detective")
+            ],
+            [
+                InlineKeyboardButton(text=t("genre_nonfiction", lang), callback_data=f"set_gen:{genre_key}:Non-Fiction"),
+                InlineKeyboardButton(text=t("genre_other", lang), callback_data=f"set_gen:{genre_key}:General")
+            ]
+        ])
+
+        await callback.answer()
+        await callback.message.edit_text(
+            t("select_genre_prompt", lang, title=selected_book["title"], author=selected_book["author"]),
+            parse_mode="Markdown",
+            reply_markup=genre_markup
+        )
+        return
+
     book_id = await database.add_book(
         DATABASE_PATH,
         chat_id=chat_id,
@@ -406,11 +437,56 @@ async def handle_suggestion_select(callback: CallbackQuery):
 
     await callback.answer(t("book_saved_cb", lang))
     text = (
-        f"{t('book_added_title', lang)}\n\n"
-        f"{t('book_field_title', lang, title=selected_book['title'])}\n"
-        f"{t('book_field_author', lang, author=selected_book['author'])}\n"
-        f"{t('book_field_genre', lang, genre=selected_book['genre'])}\n\n"
-        f"{t('click_below_to_rate', lang)}"
+        t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
+        t("click_below_to_rate", lang)
+    )
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
+
+
+# Pending genre selections dictionary
+pending_genre_selections: Dict[str, Dict[str, str]] = {}
+
+
+@router.callback_query(F.data.startswith("set_gen:"))
+async def handle_set_genre_callback(callback: CallbackQuery):
+    await register_user_and_chat(callback.message)
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    parts = callback.data.split(":", 2)
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    genre_key, chosen_genre = parts[1], parts[2]
+    selected_book = pending_genre_selections.get(genre_key)
+
+    if not selected_book:
+        await callback.answer(t("selection_expired", lang))
+        return
+
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+
+    book_id = await database.add_book(
+        DATABASE_PATH,
+        chat_id=chat_id,
+        title=selected_book["title"],
+        author=selected_book["author"],
+        genre=chosen_genre,
+        suggested_by_tg_id=user_id
+    )
+
+    pending_genre_selections.pop(genre_key, None)
+
+    bot_info = await bot.get_me()
+    rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
+    rate_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
+    ])
+
+    await callback.answer(t("book_saved_cb", lang))
+    text = (
+        t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
+        t("click_below_to_rate", lang)
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
 

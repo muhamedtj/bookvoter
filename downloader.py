@@ -70,6 +70,21 @@ async def search_options_via_userbot(query_title: str) -> None:
 
         results = []
 
+        # Helper: Extract author and title from text lines
+        def parse_title_author(raw_text: str) -> tuple[str, str]:
+            text = raw_text.strip()
+            # Split by dash or em-dash
+            if " — " in text:
+                parts = text.split(" — ", 1)
+                return parts[0].strip(), parts[1].strip()
+            elif " - " in text:
+                parts = text.split(" - ", 1)
+                return parts[0].strip(), parts[1].strip()
+            elif " by " in text.lower():
+                parts = re.split(r"\s+by\s+", text, flags=re.IGNORECASE, maxsplit=1)
+                return parts[0].strip(), parts[1].strip()
+            return text, ""
+
         # 3. Intercept reply from library bot, filtering for search responses
         async for message in app.get_chat_history(target_channel, limit=15):
             if message.id <= query_msg.id:
@@ -86,50 +101,64 @@ async def search_options_via_userbot(query_title: str) -> None:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
+                        p_title, p_author = parse_title_author(btn_text)
                         results.append({
-                            "title": btn_text,
-                            "author": "Library Bot",
-                            "genre": "General",
+                            "title": p_title,
+                            "author": p_author or query_title.title(),
+                            "genre": "",
                             "raw_label": btn_text
                         })
                 if results:
                     break
 
-            # Case B: Reply is text message listing search results (e.g., containing "найдено" or book list)
+            # Case B: Reply is text message listing search results
             if msg_text and not (message.from_user and message.from_user.is_self):
                 lines = [line.strip() for line in msg_text.splitlines() if line.strip()]
                 filtered_lines = [
                     l for l in lines
-                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "воспользуйтесь"])
+                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "воспользуйтесь", "найдено:"])
                 ]
-                for line in filtered_lines[:5]:
+
+                # Check for Line 1: Title, Line 2: Author pattern
+                i = 0
+                while i < len(filtered_lines) and len(results) < 5:
+                    line = filtered_lines[i]
+                    p_title, p_author = parse_title_author(line)
+                    if not p_author and (i + 1 < len(filtered_lines)) and not filtered_lines[i+1].startswith("/"):
+                        p_author = filtered_lines[i+1]
+                        i += 1
+
                     results.append({
-                        "title": line[:50],
-                        "author": "Library Bot",
-                        "genre": "General",
-                        "raw_label": line[:50]
+                        "title": p_title,
+                        "author": p_author or "Unknown Author",
+                        "genre": "",
+                        "raw_label": line
                     })
+                    i += 1
+
                 if results:
                     break
 
             # Case C: Direct document returned
             if message.document:
                 file_name = message.document.file_name or query_title
+                base_name = os.path.splitext(file_name)[0]
+                p_title, p_author = parse_title_author(base_name)
                 results.append({
-                    "title": os.path.splitext(file_name)[0],
-                    "author": "Library Bot",
-                    "genre": "General",
+                    "title": p_title,
+                    "author": p_author or "Unknown Author",
+                    "genre": "",
                     "raw_label": file_name
                 })
                 if results:
                     break
 
         if not results:
-            # Default single entry fallback using query_title
+            # Fallback using query_title
             results.append({
                 "title": query_title.title(),
-                "author": "Library Bot",
-                "genre": "General",
+                "author": "Unknown Author",
+                "genre": "",
                 "raw_label": query_title.title()
             })
 
