@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite
+*.db
+downloads/
+.env
