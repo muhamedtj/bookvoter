@@ -316,12 +316,16 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "🙈 Не читал"
     },
     "saved_read_score_cb": {
-        "en": "Your score ({score}/10) saved!",
-        "ru": "Ваша оценка ({score}/10) сохранена!"
+        "en": "Your score {score}/10 accepted!",
+        "ru": "Ваша оценка {score} принята!"
     },
     "saved_did_not_read_cb": {
         "en": "Recorded: Didn't read",
         "ru": "Зафиксировано: Не читал"
+    },
+    "vote_feedback_msg": {
+        "en": "Thank you! Your rating is accepted.\n\nCurrent average score for **{title}**: **{avg_rating}** (based on {count} votes).",
+        "ru": "Спасибо! Ваша оценка принята.\n\nСредний балл по книге **{title}** сейчас: **{avg_rating}** (на основе {count} голосов)."
     },
     "hof_header": {
         "en": "🏆 **Hall of Fame (Smart Weighted Rating)**\nSorted by Bayesian Weighted Rating (WR):\n\n",

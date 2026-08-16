@@ -1246,10 +1246,10 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
     await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
     await callback.answer(t("added_to_hof_cb", lang))
 
-    # Construct rating keyboard (1-10 and Didn't read)
-    row1 = [InlineKeyboardButton(text=str(i), callback_data=f"rate_read:{book_id}:{i}") for i in range(1, 6)]
-    row2 = [InlineKeyboardButton(text=str(i), callback_data=f"rate_read:{book_id}:{i}") for i in range(6, 11)]
-    row3 = [InlineKeyboardButton(text=t("btn_did_not_read", lang), callback_data=f"rate_read:{book_id}:none")]
+    # Construct rating keyboard (1-10 and Didn't read) using vote_book:{book_id}:{score}
+    row1 = [InlineKeyboardButton(text=str(i), callback_data=f"vote_book:{book_id}:{i}") for i in range(1, 6)]
+    row2 = [InlineKeyboardButton(text=str(i), callback_data=f"vote_book:{book_id}:{i}") for i in range(6, 11)]
+    row3 = [InlineKeyboardButton(text=t("btn_did_not_read", lang), callback_data=f"vote_book:{book_id}:not_read")]
     markup = InlineKeyboardMarkup(inline_keyboard=[row1, row2, row3])
 
     card_text = t(
@@ -1264,28 +1264,47 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
     await callback.message.edit_text(t("added_to_hof_cb", lang), parse_mode="Markdown")
 
 
+@router.callback_query(F.data.startswith("vote_book:"))
 @router.callback_query(F.data.startswith("rate_read:"))
-async def handle_rate_read_callback(callback: CallbackQuery):
+async def handle_vote_book_callback(callback: CallbackQuery):
     lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     parts = callback.data.split(":")
     if len(parts) != 3:
         await callback.answer()
         return
 
-    book_id_str, score_str = parts[1], parts[2]
-    book_id = int(book_id_str)
+    book_id = int(parts[1])
+    score_param = parts[2].lower()
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
 
-    if score_str.lower() == "none":
+    if score_param in ["not_read", "none"]:
         score = None
-        await database.save_read_rating(DATABASE_PATH, callback.from_user.id, book_id, score=None)
+        await database.save_read_rating(DATABASE_PATH, user_id, book_id, score=None)
         await callback.answer(t("saved_did_not_read_cb", lang), show_alert=True)
     else:
-        score = int(score_str)
-        await database.save_read_rating(DATABASE_PATH, callback.from_user.id, book_id, score=score)
+        score = int(score_param)
+        await database.save_read_rating(DATABASE_PATH, user_id, book_id, score=score)
         await callback.answer(t("saved_read_score_cb", lang, score=score), show_alert=True)
 
-    chat_id = callback.message.chat.id
-    await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
+    # Recalculate Hall of Fame average rating and votes count
+    stats = await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
+    book = await database.get_book_by_id(DATABASE_PATH, book_id)
+    book_title = book["title"] if book else f"#{book_id}"
+
+    # Visual feedback update
+    feedback_text = t(
+        "vote_feedback_msg",
+        lang,
+        title=book_title,
+        avg_rating=stats["avg_rating"],
+        count=stats["votes_count"]
+    )
+
+    try:
+        await callback.message.edit_text(feedback_text, parse_mode="Markdown")
+    except Exception as e:
+        logger.warning(f"Could not edit message for vote_book feedback: {e}")
 
 
 async def main():
