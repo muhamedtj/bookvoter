@@ -20,17 +20,14 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
             os.remove(self.db_path)
 
     async def test_language_management(self):
-        # Default effective language should be 'en'
         lang_default = await database.get_effective_language(self.db_path, chat_id=-1001)
         self.assertEqual(lang_default, "en")
 
-        # Register chat first, then set chat language to Russian
         await database.register_or_update_chat(self.db_path, chat_id=-1001, title="Test Group")
         await database.set_chat_language(self.db_path, chat_id=-1001, language_code="ru")
         lang_ru = await database.get_effective_language(self.db_path, chat_id=-1001)
         self.assertEqual(lang_ru, "ru")
 
-        # Test translation retrieval
         self.assertIn("Добро пожаловать", i18n.t("welcome_msg", "ru"))
         self.assertIn("Welcome", i18n.t("welcome_msg", "en"))
 
@@ -62,6 +59,13 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(top_books[0]["id"], b1_id)
         self.assertEqual(top_books[0]["avg_score"], 9.0)
 
+        # Test book deletion
+        deleted = await database.delete_book(self.db_path, b1_id, chat_id=-100)
+        self.assertTrue(deleted)
+        backlog = await database.get_backlog_books_for_chat(self.db_path, chat_id=-100)
+        self.assertEqual(len(backlog), 1)
+        self.assertEqual(backlog[0]["id"], b2_id)
+
     async def test_genre_rotation(self):
         b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
         await database.update_books_status(self.db_path, [b0_id], "won")
@@ -73,7 +77,7 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(top[0]["id"], b2_id)
 
     async def test_google_books_api(self):
-        results = await bot.fetch_google_books("Python Programming")
+        results = await bot.fetch_google_books("Python Programming", "en")
         self.assertTrue(len(results) > 0)
         self.assertIn("title", results[0])
         self.assertIn("author", results[0])

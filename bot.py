@@ -210,7 +210,24 @@ async def handle_start(message: Message, command: CommandObject):
         await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    await message.answer(t("welcome_msg", lang), parse_mode="Markdown")
+    # Duplicate key sections in start welcome message as inline buttons
+    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
+    ])
+
+    await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.callback_query(F.data == "open_control_panel")
+async def handle_open_control_panel_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    if not await is_admin(callback.message.chat.id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+    await callback.answer()
+    markup = get_admin_keyboard(lang)
+    await callback.message.answer(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
 
 
 @router.message(Command("language"))
@@ -239,9 +256,14 @@ async def handle_set_language_callback(callback: CallbackQuery):
         await database.set_chat_language(DATABASE_PATH, chat_id, lang_code)
 
     await callback.answer(t("language_selected", lang_code))
+    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_open_control_panel", lang_code), callback_data="open_control_panel")],
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
+    ])
     await callback.message.edit_text(
         t("language_selected", lang_code) + "\n\n" + t("welcome_msg", lang_code),
-        parse_mode="Markdown"
+        parse_mode="Markdown",
+        reply_markup=welcome_markup
     )
 
 
@@ -412,6 +434,7 @@ async def handle_poll_update(poll: Poll):
 
 # --- Admin Panel & Voting ---
 
+@router.message(Command("bookvoter"))
 @router.message(Command("admin"))
 async def handle_admin(message: Message):
     await register_user_and_chat(message)
@@ -427,7 +450,9 @@ async def handle_admin(message: Message):
 def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_start_vote", lang), callback_data="admin_start_vote")],
+        [InlineKeyboardButton(text=t("btn_finish_vote_early", lang), callback_data="admin_finish_vote_early")],
         [InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")],
+        [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
         [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")]
     ])
 
@@ -441,6 +466,93 @@ async def handle_admin_start_vote(callback: CallbackQuery):
 
     await callback.answer()
     await start_vote_process(callback.message.chat.id, lang)
+
+
+@router.callback_query(F.data == "admin_finish_vote_early")
+async def handle_admin_finish_vote_early(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    if not await is_admin(callback.message.chat.id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    chat_id = callback.message.chat.id
+    active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
+    if not active_poll:
+        await callback.answer(t("no_active_vote_err", lang), show_alert=True)
+        return
+
+    # Cancel scheduled job
+    job_id = f"poll_end_{chat_id}_{active_poll['message_id']}"
+    try:
+        if scheduler.get_job(job_id):
+            scheduler.remove_job(job_id)
+    except Exception as e:
+        logger.warning(f"Failed to remove scheduled job {job_id}: {e}")
+
+    await callback.answer()
+    await finish_vote_process(chat_id)
+
+
+@router.callback_query(F.data == "admin_delete_book")
+async def handle_admin_delete_book_menu(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    books = await database.get_backlog_books_for_chat(DATABASE_PATH, chat_id)
+    if not books:
+        await callback.answer(t("no_books_to_delete", lang), show_alert=True)
+        return
+
+    keyboard = []
+    for b in books[:10]:
+        btn_text = f"❌ {b['title'][:25]} ({b['author'][:15]})"
+        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"del_book:{b['id']}")])
+
+    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")])
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+    await callback.answer()
+    await callback.message.edit_text(t("select_book_to_delete", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("del_book:"))
+async def handle_del_book_action(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    book_id = int(callback.data.split(":")[1])
+    book = await database.get_book_by_id(DATABASE_PATH, book_id)
+    book_title = book["title"] if book else f"#{book_id}"
+
+    deleted = await database.delete_book(DATABASE_PATH, book_id, chat_id)
+    if deleted:
+        await callback.answer(t("book_deleted_success", lang, title=book_title), show_alert=True)
+    else:
+        await callback.answer("Error deleting book.", show_alert=True)
+
+    # Return to admin main menu
+    markup = get_admin_keyboard(lang)
+    await callback.message.edit_text(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data == "admin_main_menu")
+async def handle_admin_main_menu(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    if not await is_admin(callback.message.chat.id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    await callback.answer()
+    markup = get_admin_keyboard(lang)
+    await callback.message.edit_text(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
 
 
 @router.message(Command("vote"))

@@ -22,7 +22,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "📚 **Welcome to BookVoter Bot!**\n\n"
             "Commands:\n"
             "• `/suggest` [book title] - Suggest a book for your group backlog.\n"
-            "• `/admin` - Group admin panel (Start vote, Finish reading, Stats).\n"
+            "• `/bookvoter` - Control panel (Start/Finish vote, Delete books, Stats).\n"
             "• `/language` - Change bot language.\n"
             "• Click on book rating links sent in groups to rate backlog books privately!"
         ),
@@ -30,10 +30,14 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "📚 **Добро пожаловать в BookVoter Bot!**\n\n"
             "Команды:\n"
             "• `/suggest` [название книги] - Предложить книгу в бэклог группы.\n"
-            "• `/admin` - Панель администратора группы (Начать голосование, Завершить чтение, Статистика).\n"
+            "• `/bookvoter` - Панель управления (Голосование, Завершение чтения, Удаление книг, Статистика).\n"
             "• `/language` - Сменить язык бота.\n"
             "• Нажимайте на ссылки оценки книг в группе, чтобы оценивать их в личных сообщениях!"
         )
+    },
+    "btn_open_control_panel": {
+        "en": "⚙️ Open Control Panel",
+        "ru": "⚙️ Открыть панель управления"
     },
     "suggest_usage": {
         "en": "Please specify a book title, e.g.: `/suggest Dune`",
@@ -100,20 +104,44 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "⚠️ Только администраторы группы могут выполнять это действие."
     },
     "admin_panel_title": {
-        "en": "⚙️ **BookVoter Admin Panel**",
-        "ru": "⚙️ **Панель администратора BookVoter**"
+        "en": "⚙️ **BookVoter Control Panel**",
+        "ru": "⚙️ **Панель управления BookVoter**"
     },
     "btn_start_vote": {
         "en": "🎲 Start Next Book Vote",
         "ru": "🎲 Начать голосование за книгу"
     },
+    "btn_finish_vote_early": {
+        "en": "⏹️ Finish Current Vote Early",
+        "ru": "⏹️ Завершить голосование досрочно"
+    },
     "btn_finish_reading": {
         "en": "🏆 Finish Reading (Hall of Fame)",
         "ru": "🏆 Завершить чтение (Зал славы)"
     },
+    "btn_delete_book": {
+        "en": "🗑️ Delete Book from Backlog",
+        "ru": "🗑️ Удалить книгу из бэклога"
+    },
     "btn_group_stats": {
         "en": "📊 Group Stats",
         "ru": "📊 Статистика группы"
+    },
+    "btn_back_to_menu": {
+        "en": "⬅️ Back to Menu",
+        "ru": "⬅️ Назад в меню"
+    },
+    "select_book_to_delete": {
+        "en": "🗑️ **Select a book to delete from backlog or active list:**",
+        "ru": "🗑️ **Выберите книгу для удаления из бэклога или списков:**"
+    },
+    "no_books_to_delete": {
+        "en": "❌ No books found in backlog to delete.",
+        "ru": "❌ В бэклоге нет книг для удаления."
+    },
+    "book_deleted_success": {
+        "en": "✅ Book **{title}** has been deleted.",
+        "ru": "✅ Книга **{title}** была успешно удалена."
     },
     "vote_in_progress_err": {
         "en": "⚠️ A vote is already in progress for this group!",

@@ -201,6 +201,28 @@ async def add_book(
         return cursor.lastrowid
 
 
+async def delete_book(db_path: str, book_id: int, chat_id: int) -> bool:
+    """Delete a book from database for a specific chat."""
+    async with aiosqlite.connect(db_path) as db:
+        cursor = await db.execute("DELETE FROM books WHERE id = ? AND chat_id = ?", (book_id, chat_id))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def get_backlog_books_for_chat(db_path: str, chat_id: int) -> List[Dict[str, Any]]:
+    """Fetch all backlog / non-finished books for a group chat."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT id, chat_id, title, author, genre, status
+            FROM books
+            WHERE chat_id = ? AND status IN ('backlog', 'voting')
+            ORDER BY id DESC
+        """, (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_unrated_backlog_books_for_user(db_path: str, tg_id: int) -> List[Dict[str, Any]]:
     """Fetch all backlog books across chats where user is active that user hasn't rated yet."""
     internal_id = await get_or_create_user(db_path, tg_id)
