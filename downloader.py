@@ -51,22 +51,33 @@ async def search_options_via_userbot(query_title: str) -> None:
         sys.exit(1)
 
     try:
-        # 1. Send /start to library bot if needed
-        try:
-            await app.send_message(target_channel, "/start")
-            await asyncio.sleep(2)
-        except Exception as ex:
-            logging.warning(f"Could not send /start: {ex}")
+        # 1. Check if chat history is completely empty; send /start only once on initial session setup
+        history_count = 0
+        async for _ in app.get_chat_history(target_channel, limit=1):
+            history_count += 1
 
-        # 2. Send query with book title
+        if history_count == 0:
+            try:
+                await app.send_message(target_channel, "/start")
+                await asyncio.sleep(2)
+            except Exception as ex:
+                logging.warning(f"Could not send /start: {ex}")
+
+        # 2. Send query directly with book title
         query_msg = await app.send_message(target_channel, query_title)
         await asyncio.sleep(3)
 
         results = []
 
-        # 3. Intercept reply from library bot
-        async for message in app.get_chat_history(target_channel, limit=10):
+        # 3. Intercept reply from library bot, filtering for search responses
+        async for message in app.get_chat_history(target_channel, limit=15):
             if message.id <= query_msg.id:
+                continue
+
+            msg_text = message.text or message.caption or ""
+
+            # Skip welcome / start messages
+            if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
                 continue
 
             # Case A: Reply contains inline buttons (multiple book choices)
@@ -74,19 +85,23 @@ async def search_options_via_userbot(query_title: str) -> None:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
-                        # Extract title/author or format clean label
                         results.append({
                             "title": btn_text,
                             "author": "Library Bot",
                             "genre": "General",
                             "raw_label": btn_text
                         })
-                break
+                if results:
+                    break
 
-            # Case B: Reply is text message listing search results
-            if message.text and not message.from_user.is_self:
-                lines = [line.strip() for line in message.text.splitlines() if line.strip()]
-                for line in lines[:5]:
+            # Case B: Reply is text message listing search results (e.g., containing "найдено" or book list)
+            if msg_text and not (message.from_user and message.from_user.is_self):
+                lines = [line.strip() for line in msg_text.splitlines() if line.strip()]
+                filtered_lines = [
+                    l for l in lines
+                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "воспользуйтесь"])
+                ]
+                for line in filtered_lines[:5]:
                     results.append({
                         "title": line[:50],
                         "author": "Library Bot",
@@ -105,7 +120,8 @@ async def search_options_via_userbot(query_title: str) -> None:
                     "genre": "General",
                     "raw_label": file_name
                 })
-                break
+                if results:
+                    break
 
         if not results:
             # Default single entry fallback using query_title
@@ -151,19 +167,35 @@ async def search_and_download(title: str) -> None:
     try:
         downloaded_path = None
 
-        try:
-            await app.send_message(target_channel, "/start")
-            await asyncio.sleep(2)
-        except Exception as start_err:
-            logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
+        # Send /start only if history is completely empty
+        history_count = 0
+        async for _ in app.get_chat_history(target_channel, limit=1):
+            history_count += 1
 
+        if history_count == 0:
+            try:
+                await app.send_message(target_channel, "/start")
+                await asyncio.sleep(2)
+            except Exception as start_err:
+                logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
+
+        query_msg = None
         try:
-            await app.send_message(target_channel, title)
+            query_msg = await app.send_message(target_channel, title)
             await asyncio.sleep(4)
         except Exception as send_title_err:
             logging.warning(f"Could not send title query to target {target_channel}: {send_title_err}")
 
-        async for message in app.get_chat_history(target_channel, limit=10):
+        q_id = query_msg.id if query_msg else 0
+
+        async for message in app.get_chat_history(target_channel, limit=15):
+            if message.id <= q_id:
+                continue
+
+            msg_text = message.text or message.caption or ""
+            if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
+                continue
+
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 try:
                     first_button = message.reply_markup.inline_keyboard[0][0]
