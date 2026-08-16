@@ -91,5 +91,30 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sa_stats["total_voters"], 1)
         self.assertEqual(len(sa_stats["top_books"]), 1)
 
+    async def test_post_reading_ratings_and_hof(self):
+        u1_id = await database.get_or_create_user(self.db_path, tg_id=3001, username="user1")
+        u2_id = await database.get_or_create_user(self.db_path, tg_id=3002, username="user2")
+        u3_id = await database.get_or_create_user(self.db_path, tg_id=3003, username="user3")
+
+        b_id = await database.add_book(self.db_path, chat_id=-300, title="1984", author="George Orwell", genre="Dystopia")
+        await database.update_books_status(self.db_path, [b_id], "won")
+
+        # Save post read ratings
+        await database.save_read_rating(self.db_path, tg_id=3001, book_id=b_id, score=10)
+        await database.save_read_rating(self.db_path, tg_id=3002, book_id=b_id, score=8)
+        await database.save_read_rating(self.db_path, tg_id=3003, book_id=b_id, score=None) # Didn't read
+
+        res = await database.update_hall_of_fame_rating(self.db_path, b_id, chat_id=-300)
+        self.assertEqual(res["avg_rating"], 9.0)
+        self.assertEqual(res["votes_count"], 2)
+
+        # Test min_votes threshold filtering in get_hall_of_fame_detailed
+        hof_data = await database.get_hall_of_fame_detailed(self.db_path, chat_id=-300, min_votes=3)
+        self.assertEqual(len(hof_data["qualified"]), 0)
+        self.assertEqual(len(hof_data["low_votes"]), 1)
+
+        hof_data_2 = await database.get_hall_of_fame_detailed(self.db_path, chat_id=-300, min_votes=2)
+        self.assertEqual(len(hof_data_2["qualified"]), 1)
+
 if __name__ == "__main__":
     unittest.main()

@@ -61,12 +61,26 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
             );
         """)
 
+        # Table: read_ratings (Post-reading scores 1-10 or NULL for "didn't read")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS read_ratings (
+                user_id INTEGER NOT NULL,
+                book_id INTEGER NOT NULL,
+                score INTEGER CHECK (score IS NULL OR (score >= 1 AND score <= 10)),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, book_id),
+                FOREIGN KEY (user_id) REFERENCES users (internal_id) ON DELETE CASCADE,
+                FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
+            );
+        """)
+
         # Table: hall_of_fame
         await db.execute("""
             CREATE TABLE IF NOT EXISTS hall_of_fame (
                 book_id INTEGER PRIMARY KEY,
                 chat_id INTEGER NOT NULL,
                 final_club_rating REAL,
+                votes_count INTEGER DEFAULT 0,
                 completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE,
                 FOREIGN KEY (chat_id) REFERENCES chats (chat_id) ON DELETE CASCADE
@@ -99,6 +113,14 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
                     await db.execute("ALTER TABLE backlog_ratings ADD COLUMN created_at TIMESTAMP;")
                 except (sqlite3.OperationalError, aiosqlite.OperationalError, Exception) as e:
                     logger.warning(f"Failed or skipped adding created_at column to backlog_ratings: {e}")
+
+        async with db.execute("PRAGMA table_info(hall_of_fame)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+            if "votes_count" not in columns:
+                try:
+                    await db.execute("ALTER TABLE hall_of_fame ADD COLUMN votes_count INTEGER DEFAULT 0;")
+                except (sqlite3.OperationalError, aiosqlite.OperationalError, Exception) as e:
+                    logger.warning(f"Failed or skipped adding votes_count column to hall_of_fame: {e}")
 
         await db.commit()
 
@@ -336,6 +358,45 @@ async def save_backlog_rating(db_path: str, tg_id: int, book_id: int, score: int
         await db.commit()
 
 
+async def save_read_rating(db_path: str, tg_id: int, book_id: int, score: Optional[int]) -> None:
+    """Save post-reading score (1-10 or None for didn't read) for a finished book."""
+    internal_id = await get_or_create_user(db_path, tg_id)
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("""
+            INSERT INTO read_ratings (user_id, book_id, score, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, book_id) DO UPDATE SET score = excluded.score, created_at = CURRENT_TIMESTAMP
+        """, (internal_id, book_id, score))
+        await db.commit()
+
+
+async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -> Dict[str, Any]:
+    """Calculate average post-reading rating and votes count, update Hall of Fame and book status to 'done'."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("""
+            SELECT COALESCE(AVG(score), 0), COUNT(score)
+            FROM read_ratings
+            WHERE book_id = ? AND score IS NOT NULL AND score >= 1
+        """, (book_id,)) as cursor:
+            row = await cursor.fetchone()
+            avg_rating = round(row[0], 2) if row else 0.0
+            votes_count = row[1] if row else 0
+
+        await db.execute("""
+            INSERT INTO hall_of_fame (book_id, chat_id, final_club_rating, votes_count)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(book_id) DO UPDATE SET
+                final_club_rating = excluded.final_club_rating,
+                votes_count = excluded.votes_count
+        """, (book_id, chat_id, avg_rating, votes_count))
+
+        # Ensure status is 'done'
+        await db.execute("UPDATE books SET status = 'done' WHERE id = ?", (book_id,))
+        await db.commit()
+
+        return {"avg_rating": avg_rating, "votes_count": votes_count}
+
+
 async def get_last_read_genre(db_path: str, chat_id: int) -> Optional[str]:
     """Get genre of the most recently finished/won book in the chat."""
     async with aiosqlite.connect(db_path) as db:
@@ -466,19 +527,42 @@ async def add_to_hall_of_fame(db_path: str, book_id: int, chat_id: int, final_ra
         await db.commit()
 
 
-async def get_hall_of_fame(db_path: str, chat_id: int) -> List[Dict[str, Any]]:
-    """Get all Hall of Fame books for a chat."""
+async def get_hall_of_fame_detailed(db_path: str, chat_id: int, min_votes: int = 3) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Get Hall of Fame books for a chat split into qualified (>= min_votes) and low_votes (< min_votes).
+    Calculates live average read_score and votes count.
+    """
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
-            SELECT b.title, b.author, b.genre, h.final_club_rating, h.completed_at
+            SELECT b.id, b.title, b.author, b.genre, h.completed_at,
+                   COALESCE(AVG(r.score), h.final_club_rating, 0) as avg_score,
+                   COUNT(r.score) as live_votes_count
             FROM hall_of_fame h
             JOIN books b ON h.book_id = b.id
+            LEFT JOIN read_ratings r ON b.id = r.book_id AND r.score IS NOT NULL AND r.score >= 1
             WHERE h.chat_id = ?
-            ORDER BY h.completed_at DESC
+            GROUP BY b.id
+            ORDER BY avg_score DESC, live_votes_count DESC, b.id ASC
         """, (chat_id,)) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
+            rows = [dict(r) for r in await cursor.fetchall()]
+
+        qualified = []
+        low_votes = []
+        for r in rows:
+            r["avg_score"] = round(r["avg_score"], 2)
+            if r["live_votes_count"] >= min_votes:
+                qualified.append(r)
+            else:
+                low_votes.append(r)
+
+        return {"qualified": qualified, "low_votes": low_votes}
+
+
+async def get_hall_of_fame(db_path: str, chat_id: int) -> List[Dict[str, Any]]:
+    """Get all Hall of Fame books for a chat."""
+    res = await get_hall_of_fame_detailed(db_path, chat_id, min_votes=0)
+    return res["qualified"] + res["low_votes"]
 
 
 async def audit_backlog_activity(db_path: str, chat_id: int, active_tg_ids: List[int]) -> List[Dict[str, Any]]:

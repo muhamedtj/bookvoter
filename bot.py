@@ -29,6 +29,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "bookvoter.db")
+MIN_VOTES_FOR_RATING = 3
 
 SUPER_ADMIN_IDS: List[int] = []
 super_admin_env = os.getenv("SUPER_ADMIN_IDS", "")
@@ -1020,7 +1021,46 @@ async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: st
         await bot.send_message(chat_id, t("file_download_err", lang, title=book_title), parse_mode="Markdown")
 
 
-# --- Hall of Fame & Stats Callbacks ---
+# --- Hall of Fame & Post-Reading Rating Handlers ---
+
+@router.message(Command("halloffame"))
+@router.message(Command("hof"))
+async def handle_halloffame_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    await send_halloffame_response(message.chat.id, lang, target_msg_or_cb=message)
+
+
+async def send_halloffame_response(chat_id: int, lang: str, target_msg_or_cb: Any):
+    data = await database.get_hall_of_fame_detailed(DATABASE_PATH, chat_id, min_votes=MIN_VOTES_FOR_RATING)
+    qualified = data["qualified"]
+    low_votes = data["low_votes"]
+
+    if not qualified and not low_votes:
+        text = t("hof_empty", lang)
+        if isinstance(target_msg_or_cb, Message):
+            await target_msg_or_cb.answer(text, parse_mode="Markdown")
+        elif isinstance(target_msg_or_cb, CallbackQuery):
+            await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown")
+        return
+
+    text = t("hof_header", lang)
+    if qualified:
+        for idx, item in enumerate(qualified, 1):
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+    else:
+        text += "—\n"
+
+    if low_votes:
+        text += t("hof_low_votes_header", lang, min_votes=MIN_VOTES_FOR_RATING)
+        for idx, item in enumerate(low_votes, 1):
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+
+    if isinstance(target_msg_or_cb, Message):
+        await target_msg_or_cb.answer(text, parse_mode="Markdown")
+    elif isinstance(target_msg_or_cb, CallbackQuery):
+        await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown")
+
 
 @router.callback_query(F.data == "admin_finish_reading")
 async def handle_admin_finish_reading(callback: CallbackQuery):
@@ -1035,15 +1075,50 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
         await callback.answer(t("no_active_reading_err", lang), show_alert=True)
         return
 
-    await database.add_to_hall_of_fame(DATABASE_PATH, current_book["id"], chat_id, final_rating=None)
+    book_id = current_book["id"]
+    await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
     await callback.answer(t("added_to_hof_cb", lang))
 
-    hof_list = await database.get_hall_of_fame(DATABASE_PATH, chat_id)
-    text = t("hof_title", lang)
-    for idx, item in enumerate(hof_list, 1):
-        text += f"{idx}. **{item['title']}** ({item['author']})\n"
+    # Construct rating keyboard (1-10 and Didn't read)
+    row1 = [InlineKeyboardButton(text=str(i), callback_data=f"rate_read:{book_id}:{i}") for i in range(1, 6)]
+    row2 = [InlineKeyboardButton(text=str(i), callback_data=f"rate_read:{book_id}:{i}") for i in range(6, 11)]
+    row3 = [InlineKeyboardButton(text=t("btn_did_not_read", lang), callback_data=f"rate_read:{book_id}:none")]
+    markup = InlineKeyboardMarkup(inline_keyboard=[row1, row2, row3])
 
-    await callback.message.edit_text(text, parse_mode="Markdown")
+    card_text = t(
+        "finish_reading_card_title",
+        lang,
+        title=current_book["title"],
+        author=current_book["author"],
+        genre=current_book["genre"] or t("general_genre", lang)
+    )
+
+    await bot.send_message(chat_id, card_text, parse_mode="Markdown", reply_markup=markup)
+    await callback.message.edit_text(t("added_to_hof_cb", lang), parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("rate_read:"))
+async def handle_rate_read_callback(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    parts = callback.data.split(":")
+    if len(parts) != 3:
+        await callback.answer()
+        return
+
+    book_id_str, score_str = parts[1], parts[2]
+    book_id = int(book_id_str)
+
+    if score_str.lower() == "none":
+        score = None
+        await database.save_read_rating(DATABASE_PATH, callback.from_user.id, book_id, score=None)
+        await callback.answer(t("saved_did_not_read_cb", lang), show_alert=True)
+    else:
+        score = int(score_str)
+        await database.save_read_rating(DATABASE_PATH, callback.from_user.id, book_id, score=score)
+        await callback.answer(t("saved_read_score_cb", lang, score=score), show_alert=True)
+
+    chat_id = callback.message.chat.id
+    await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
 
 
 async def main():

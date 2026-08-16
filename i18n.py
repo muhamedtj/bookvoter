@@ -272,8 +272,40 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Нет читаемой книги для завершения."
     },
     "added_to_hof_cb": {
-        "en": "Book added to Hall of Fame!",
-        "ru": "Книга добавлена в Зал славы!"
+        "en": "Reading finished! Rating poll sent to chat.",
+        "ru": "Чтение завершено! Опрос оценки книги отправлен в чат."
+    },
+    "finish_reading_card_title": {
+        "en": "📖 **Reading Completed!**\n\nBook: **{title}** ({author})\nGenre: **{genre}**\n\nPlease rate this book after reading:",
+        "ru": "📖 **Чтение книги завершено!**\n\nКнига: **{title}** ({author})\nЖанр: **{genre}**\n\nПожалуйста, оцените прочитанную книгу:"
+    },
+    "btn_did_not_read": {
+        "en": "🙈 Didn't read",
+        "ru": "🙈 Не читал"
+    },
+    "saved_read_score_cb": {
+        "en": "Your score ({score}/10) saved!",
+        "ru": "Ваша оценка ({score}/10) сохранена!"
+    },
+    "saved_did_not_read_cb": {
+        "en": "Recorded: Didn't read",
+        "ru": "Зафиксировано: Не читал"
+    },
+    "hof_header": {
+        "en": "🏆 **Hall of Fame (Provisional Top)**\nSorted by average reading score:\n\n",
+        "ru": "🏆 **Зал славы (Топ прочитанных книг)**\nОтсортировано по средней оценке за прочтение:\n\n"
+    },
+    "hof_low_votes_header": {
+        "en": "\n\n⚠️ **Low Votes (< {min_votes} votes):**\n",
+        "ru": "\n\n⚠️ **Мало оценок (менее {min_votes} голосов):**\n"
+    },
+    "hof_empty": {
+        "en": "🏆 Hall of Fame is currently empty.",
+        "ru": "🏆 Зал славы пока пуст."
+    },
+    "hof_item_format": {
+        "en": "{idx}. **{title}** ({author}) — ⭐ **{score}** (based on {count} votes)",
+        "ru": "{idx}. **{title}** ({author}) — ⭐ **{score}** (на основе {count} голосов)"
     },
     "hof_title": {
         "en": "🏆 **Hall of Fame Updated!**\n\n",
