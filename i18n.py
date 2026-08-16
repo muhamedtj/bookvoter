@@ -13,7 +13,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": (
             "📚 **Welcome to BookVoter Bot!**\n\n"
             "Commands:\n"
-            "• `/suggest [book title]` - Suggest a book for your group backlog.\n"
+            "• `/suggest` [book title] - Suggest a book for your group backlog.\n"
             "• `/admin` - Group admin panel (Start vote, Finish reading, Stats).\n"
             "• `/language` - Change bot language.\n"
             "• Click on book rating links sent in groups to rate backlog books privately!"
@@ -21,7 +21,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": (
             "📚 **Добро пожаловать в BookVoter Bot!**\n\n"
             "Команды:\n"
-            "• `/suggest [название книги]` - Предложить книгу в бэклог группы.\n"
+            "• `/suggest` [название книги] - Предложить книгу в бэклог группы.\n"
             "• `/admin` - Панель администратора группы (Начать голосование, Завершить чтение, Статистика).\n"
             "• `/language` - Сменить язык бота.\n"
             "• Нажимайте на ссылки оценки книг в группе, чтобы оценивать их в личных сообщениях!"

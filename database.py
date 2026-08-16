@@ -305,10 +305,19 @@ async def save_active_poll(db_path: str, chat_id: int, poll_id: str, message_id:
 
 
 async def get_active_poll(db_path: str, chat_id: int) -> Optional[Dict[str, Any]]:
-    """Retrieve active poll for a chat."""
+    """Retrieve active poll for a chat by chat_id."""
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM active_polls WHERE chat_id = ?", (chat_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def get_active_poll_by_poll_id(db_path: str, poll_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve active poll by poll_id."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM active_polls WHERE poll_id = ?", (poll_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
 

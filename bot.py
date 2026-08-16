@@ -12,7 +12,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    FSInputFile, Poll
+    FSInputFile, Poll, PollAnswer
 )
 from aiogram.enums import ChatType
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -335,6 +335,38 @@ async def handle_rate_callback(callback: CallbackQuery):
     await send_next_unrated_book(callback.from_user.id, callback, lang)
 
 
+# --- Real-time Poll Answer / Vote Monitoring (> 50% majority auto-closure) ---
+
+@router.poll()
+async def handle_poll_update(poll: Poll):
+    active_poll = await database.get_active_poll_by_poll_id(DATABASE_PATH, poll.id)
+    if not active_poll:
+        return
+
+    chat_id = active_poll["chat_id"]
+    total_votes = poll.total_voter_count
+
+    if total_votes == 0:
+        return
+
+    # Check if any option has > 50% of the votes
+    for option in poll.options:
+        if option.voter_count / total_votes > 0.5:
+            logger.info(f"Poll option achieved majority (>50%) in chat {chat_id}. Finishing vote automatically...")
+
+            # Cancel scheduled 24h job
+            job_id = f"poll_end_{chat_id}_{active_poll['message_id']}"
+            try:
+                if scheduler.get_job(job_id):
+                    scheduler.remove_job(job_id)
+            except Exception as e:
+                logger.warning(f"Failed to remove scheduled job {job_id}: {e}")
+
+            # Complete vote process early
+            await finish_vote_process(chat_id)
+            break
+
+
 # --- Admin Panel & Voting ---
 
 @router.message(Command("admin"))
@@ -498,7 +530,8 @@ async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: st
         stdout, stderr = await proc.communicate()
 
         if proc.returncode == 0:
-            file_path = stdout.decode().strip()
+            output_lines = stdout.decode().strip().splitlines()
+            file_path = output_lines[-1] if output_lines else ""
             if os.path.exists(file_path):
                 document = FSInputFile(file_path)
                 msg = await bot.send_document(
