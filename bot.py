@@ -29,7 +29,6 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "bookvoter.db")
-GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY", "")
 
 SUPER_ADMIN_IDS: List[int] = []
 super_admin_env = os.getenv("SUPER_ADMIN_IDS", "")
@@ -98,84 +97,40 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# Helper: Fetch English edition metadata for author/genre enrichment
-async def fetch_english_enrichment(session: aiohttp.ClientSession, title: str) -> Dict[str, Any]:
+# Userbot search invoker
+async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List[Dict[str, str]]]:
     try:
-        url = f"https://www.googleapis.com/books/v1/volumes?q={quote(title)}&langRestrict=en&maxResults=1"
-        if GOOGLE_BOOKS_API_KEY:
-            url += f"&key={GOOGLE_BOOKS_API_KEY}"
-        async with session.get(url, timeout=5) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                items = data.get("items", [])
-                if items:
-                    info = items[0].get("volumeInfo", {})
-                    authors = info.get("authors", [])
-                    categories = info.get("categories", [])
-                    return {
-                        "author": ", ".join(authors) if authors else None,
-                        "genre": categories[0] if categories else None
-                    }
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "downloader.py",
+            "search",
+            query,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode == 0:
+            output_str = stdout.decode("utf-8").strip()
+            # Extract JSON output
+            json_lines = [line for line in output_str.splitlines() if line.startswith("[")]
+            if json_lines:
+                data = json.loads(json_lines[-1])
+                return data
+            elif output_str.startswith("["):
+                return json.loads(output_str)
+
+        logger.warning(f"Userbot search returned non-zero code or failed: {stderr.decode()}")
+        # Default fallback
+        return [{
+            "title": query.title(),
+            "author": "Library Bot",
+            "genre": t("general_genre", lang),
+            "raw_label": query.title()
+        }]
     except Exception as e:
-        logger.debug(f"Enrichment fetch failed for '{title}': {e}")
-    return {"author": None, "genre": None}
-
-
-# Google Books API fetcher with strict validation
-async def fetch_google_books(query: str, lang: str = "en") -> Optional[List[Dict[str, str]]]:
-    url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}&maxResults=5"
-    if GOOGLE_BOOKS_API_KEY:
-        url += f"&key={GOOGLE_BOOKS_API_KEY}"
-
-    general_genre_str = t("general_genre", lang)
-
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    logger.warning(f"Google Books API returned status {resp.status}")
-                    return None
-
-                data = await resp.json()
-                items = data.get("items", [])
-                results = []
-
-                for item in items[:5]:
-                    info = item.get("volumeInfo", {})
-                    title = info.get("title")
-                    if not title or not title.strip():
-                        continue
-
-                    authors = info.get("authors", [])
-                    categories = info.get("categories", [])
-
-                    author_val = ", ".join(authors).strip() if authors else None
-                    genre_val = categories[0].strip() if categories else None
-
-                    # If author or genre is missing/General, attempt English enrichment
-                    if not author_val or not genre_val or genre_val.lower() == "general":
-                        enriched = await fetch_english_enrichment(session, title)
-                        if not author_val and enriched.get("author"):
-                            author_val = enriched["author"]
-                        if (not genre_val or genre_val.lower() == "general") and enriched.get("genre"):
-                            genre_val = enriched["genre"]
-
-                    # Discard result if author is missing or invalid stub
-                    if not author_val or author_val.lower() in ["unknown author", "неизвестный автор"]:
-                        continue
-
-                    genre_str = genre_val if (genre_val and genre_val.lower() != "general") else general_genre_str
-
-                    results.append({
-                        "title": title.strip(),
-                        "author": author_val,
-                        "genre": genre_str
-                    })
-
-                return results
-        except Exception as e:
-            logger.error(f"Error fetching Google Books: {e}")
-            return None
+        logger.error(f"Subprocess search execution error: {e}")
+        return None
 
 
 # In-memory poll vote counter for tracking non-anonymous PollAnswer votes per option
@@ -295,7 +250,7 @@ async def handle_suggest(message: Message, command: CommandObject):
         return
 
     status_msg = await message.answer(t("searching_google_books", lang))
-    books = await fetch_google_books(query, lang)
+    books = await fetch_books_via_userbot(query, lang)
 
     if books is None:
         await status_msg.edit_text(t("google_books_api_error", lang))
@@ -310,7 +265,7 @@ async def handle_suggest(message: Message, command: CommandObject):
 
     inline_keyboard = []
     for idx, b in enumerate(books):
-        btn_text = f"📖 {b['title'][:25]} by {b['author'][:15]}"
+        btn_text = f"📖 {b['title'][:35]}"
         inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"sel_sug:{temp_key}:{idx}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)

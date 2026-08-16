@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import asyncio
 import logging
 from dotenv import load_dotenv
@@ -15,31 +16,127 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
 
+def get_target_channel():
+    if not CHANNEL_ID:
+        return None
+    target = CHANNEL_ID.strip()
+    if target.startswith("-100") and target[1:].isdigit():
+        return int(target)
+    elif target.isdigit():
+        return int(target)
+    elif target.startswith("-") and target[1:].isdigit():
+        return int(target)
+    return target
+
+async def search_options_via_userbot(query_title: str) -> None:
+    if not API_ID or not API_HASH or not SESSION_STRING or not CHANNEL_ID:
+        sys.stderr.write("Error: Missing required environment variables (API_ID, API_HASH, SESSION_STRING, CHANNEL_ID).\n")
+        sys.exit(1)
+
+    target_channel = get_target_channel()
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+    app = Client(
+        name="userbot_searcher",
+        api_id=int(API_ID),
+        api_hash=API_HASH,
+        session_string=SESSION_STRING,
+        in_memory=True
+    )
+
+    try:
+        await app.start()
+    except Exception as e:
+        sys.stderr.write(f"Error starting Pyrogram client: {e}\n")
+        sys.exit(1)
+
+    try:
+        # 1. Send /start to library bot if needed
+        try:
+            await app.send_message(target_channel, "/start")
+            await asyncio.sleep(2)
+        except Exception as ex:
+            logging.warning(f"Could not send /start: {ex}")
+
+        # 2. Send query with book title
+        query_msg = await app.send_message(target_channel, query_title)
+        await asyncio.sleep(3)
+
+        results = []
+
+        # 3. Intercept reply from library bot
+        async for message in app.get_chat_history(target_channel, limit=10):
+            if message.id <= query_msg.id:
+                continue
+
+            # Case A: Reply contains inline buttons (multiple book choices)
+            if message.reply_markup and message.reply_markup.inline_keyboard:
+                for row in message.reply_markup.inline_keyboard[:5]:
+                    for btn in row:
+                        btn_text = btn.text.strip()
+                        # Extract title/author or format clean label
+                        results.append({
+                            "title": btn_text,
+                            "author": "Library Bot",
+                            "genre": "General",
+                            "raw_label": btn_text
+                        })
+                break
+
+            # Case B: Reply is text message listing search results
+            if message.text and not message.from_user.is_self:
+                lines = [line.strip() for line in message.text.splitlines() if line.strip()]
+                for line in lines[:5]:
+                    results.append({
+                        "title": line[:50],
+                        "author": "Library Bot",
+                        "genre": "General",
+                        "raw_label": line[:50]
+                    })
+                if results:
+                    break
+
+            # Case C: Direct document returned
+            if message.document:
+                file_name = message.document.file_name or query_title
+                results.append({
+                    "title": os.path.splitext(file_name)[0],
+                    "author": "Library Bot",
+                    "genre": "General",
+                    "raw_label": file_name
+                })
+                break
+
+        if not results:
+            # Default single entry fallback using query_title
+            results.append({
+                "title": query_title.title(),
+                "author": "Library Bot",
+                "genre": "General",
+                "raw_label": query_title.title()
+            })
+
+        print(json.dumps(results, ensure_ascii=False))
+        sys.exit(0)
+
+    except Exception as e:
+        sys.stderr.write(f"Error during search: {e}\n")
+        sys.exit(1)
+    finally:
+        await app.stop()
+
+
 async def search_and_download(title: str) -> None:
     if not API_ID or not API_HASH or not SESSION_STRING or not CHANNEL_ID:
         sys.stderr.write("Error: Missing required environment variables (API_ID, API_HASH, SESSION_STRING, CHANNEL_ID).\n")
         sys.exit(1)
 
-    try:
-        api_id_int = int(API_ID)
-    except ValueError:
-        sys.stderr.write("Error: API_ID must be an integer.\n")
-        sys.exit(1)
-
-    # Convert channel ID to int if numeric
-    target_channel = CHANNEL_ID
-    if target_channel.startswith("-100") and target_channel[1:].isdigit():
-        target_channel = int(target_channel)
-    elif target_channel.isdigit():
-        target_channel = int(target_channel)
-    elif target_channel.startswith("-") and target_channel[1:].isdigit():
-        target_channel = int(target_channel)
-
+    target_channel = get_target_channel()
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
     app = Client(
         name="userbot_downloader",
-        api_id=api_id_int,
+        api_id=int(API_ID),
         api_hash=API_HASH,
         session_string=SESSION_STRING,
         in_memory=True
@@ -54,27 +151,21 @@ async def search_and_download(title: str) -> None:
     try:
         downloaded_path = None
 
-        # 1. Send /start command to target library bot/chat to activate dialogue if needed
         try:
             await app.send_message(target_channel, "/start")
-            # 2. Pause 5-10 seconds after sending /start
-            await asyncio.sleep(5)
+            await asyncio.sleep(2)
         except Exception as start_err:
             logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
 
-        # 3. Send query with book title to the library bot
         try:
             await app.send_message(target_channel, title)
-            await asyncio.sleep(5)
+            await asyncio.sleep(4)
         except Exception as send_title_err:
             logging.warning(f"Could not send title query to target {target_channel}: {send_title_err}")
 
-        # 4. Search recent messages in target channel/chat for documents or inline buttons
         async for message in app.get_chat_history(target_channel, limit=10):
-            # Check if message contains inline keyboard buttons (e.g. selection list from library bot)
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 try:
-                    # Click the first inline download button
                     first_button = message.reply_markup.inline_keyboard[0][0]
                     if first_button.callback_data:
                         await app.request_callback_answer(
@@ -82,8 +173,7 @@ async def search_and_download(title: str) -> None:
                             message_id=message.id,
                             callback_data=first_button.callback_data
                         )
-                        # Pause brief moment for bot to deliver the document
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(4)
                 except Exception as cb_err:
                     logging.warning(f"Failed to trigger inline button: {cb_err}")
 
@@ -97,7 +187,6 @@ async def search_and_download(title: str) -> None:
                     )
                     break
 
-        # Fallback check if document arrived in latest messages after button click
         if not downloaded_path:
             async for message in app.get_chat_history(target_channel, limit=5):
                 if message.document:
@@ -124,20 +213,24 @@ async def search_and_download(title: str) -> None:
     finally:
         await app.stop()
 
+
 def main():
-    # Suppress verbose pyrogram logging
     logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
     if len(sys.argv) < 2:
-        sys.stderr.write("Usage: python downloader.py <book_title>\n")
+        sys.stderr.write("Usage: python downloader.py <search|download> <book_title> OR python downloader.py <book_title>\n")
         sys.exit(1)
 
-    book_title = sys.argv[1].strip()
-    if not book_title:
-        sys.stderr.write("Error: Book title argument cannot be empty.\n")
-        sys.exit(1)
-
-    asyncio.run(search_and_download(book_title))
+    if len(sys.argv) >= 3 and sys.argv[1].lower() in ["search", "download"]:
+        mode = sys.argv[1].lower()
+        title = sys.argv[2].strip()
+        if mode == "search":
+            asyncio.run(search_options_via_userbot(title))
+        else:
+            asyncio.run(search_and_download(title))
+    else:
+        title = sys.argv[1].strip()
+        asyncio.run(search_and_download(title))
 
 if __name__ == "__main__":
     main()

@@ -48,12 +48,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Пожалуйста, укажите название книги, например: `/suggest Дюна`"
     },
     "searching_google_books": {
-        "en": "Searching Google Books...",
-        "ru": "Поиск в Google Books..."
+        "en": "Searching book in library...",
+        "ru": "Ищем книгу в библиотеке..."
     },
     "google_books_api_error": {
-        "en": "Could not connect to the book database. Please try again later.",
-        "ru": "Не удалось связаться с базой данных книг. Попробуйте позже."
+        "en": "Could not connect to the book library database. Please try again later.",
+        "ru": "Не удалось связаться с базой данных книг библиотеки. Попробуйте позже."
     },
     "no_valid_books_found": {
         "en": "Could not find a book matching your query. Please try refining the title.",
@@ -68,8 +68,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "По вашему запросу ничего не найдено. Попробуйте другое название."
     },
     "select_matching_book": {
-        "en": "Select the matching book from Google Books results:",
-        "ru": "Выберите подходящую книгу из результатов Google Books:"
+        "en": "Select the matching edition from search results:",
+        "ru": "Выберите подходящее издание из результатов поиска:"
     },
     "selection_expired": {
         "en": "Selection expired or invalid. Please run /suggest again.",
@@ -142,6 +142,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "all_genres_btn": {
         "en": "🌐 All Genres",
         "ru": "🌐 Все жанры"
+    },
+    "books_in_genre_title": {
+        "en": "📚 **Top Books for Voting ({genre}):**\nSorted by average club rating:",
+        "ru": "📚 **Топ книг для голосования ({genre}):**\nОтсортировано по среднему рейтингу клуба:"
     },
     "btn_start_vote": {
         "en": "🎲 Start Next Book Vote",
