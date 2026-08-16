@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 async def init_db(db_path: str = "bookvoter.db") -> None:
-    """Initialize database tables."""
+    """Initialize database tables and run migrations."""
     async with aiosqlite.connect(db_path) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
 
@@ -15,7 +15,8 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
                 internal_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tg_id INTEGER UNIQUE NOT NULL,
                 username TEXT,
-                full_name TEXT
+                full_name TEXT,
+                language_code TEXT
             );
         """)
 
@@ -24,7 +25,8 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
             CREATE TABLE IF NOT EXISTS chats (
                 chat_id INTEGER PRIMARY KEY,
                 status TEXT DEFAULT 'active',
-                title TEXT
+                title TEXT,
+                language_code TEXT
             );
         """)
 
@@ -81,6 +83,13 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
             );
         """)
 
+        # Migrations for existing DBs if language_code column doesn't exist
+        for table in ["users", "chats"]:
+            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                columns = [row[1] for row in await cursor.fetchall()]
+                if "language_code" not in columns:
+                    await db.execute(f"ALTER TABLE {table} ADD COLUMN language_code TEXT;")
+
         await db.commit()
 
 
@@ -118,6 +127,53 @@ async def register_or_update_chat(db_path: str, chat_id: int, title: Optional[st
                 title = COALESCE(excluded.title, chats.title);
         """, (chat_id, status, title))
         await db.commit()
+
+
+async def set_chat_language(db_path: str, chat_id: int, language_code: str) -> None:
+    """Set language preference for a chat."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("UPDATE chats SET language_code = ? WHERE chat_id = ?", (language_code, chat_id))
+        await db.commit()
+
+
+async def get_chat_language(db_path: str, chat_id: int) -> Optional[str]:
+    """Get language preference for a chat (returns None if not set)."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT language_code FROM chats WHERE chat_id = ?", (chat_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else None
+
+
+async def set_user_language(db_path: str, tg_id: int, language_code: str) -> None:
+    """Set language preference for a user."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute("UPDATE users SET language_code = ? WHERE tg_id = ?", (language_code, tg_id))
+        await db.commit()
+
+
+async def get_user_language(db_path: str, tg_id: int) -> Optional[str]:
+    """Get language preference for a user (returns None if not set)."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("SELECT language_code FROM users WHERE tg_id = ?", (tg_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else None
+
+
+async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optional[int] = None) -> str:
+    """
+    Get effective language preference:
+    If chat is private (chat_id > 0), user language is used.
+    If chat is group (chat_id < 0), chat language is used.
+    Defaults to 'en' if not explicitly set.
+    """
+    if chat_id > 0:
+        lang = await get_user_language(db_path, chat_id)
+        if not lang and user_tg_id:
+            lang = await get_user_language(db_path, user_tg_id)
+        return lang if lang else "en"
+    else:
+        lang = await get_chat_language(db_path, chat_id)
+        return lang if lang else "en"
 
 
 async def add_book(

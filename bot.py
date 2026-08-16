@@ -18,6 +18,7 @@ from aiogram.enums import ChatType
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import database
+from i18n import t
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -81,6 +82,21 @@ async def register_user_and_chat(message: Message):
         )
 
 
+# Helper: Get effective language
+async def get_lang(chat_id: int, user_id: Optional[int] = None) -> str:
+    return await database.get_effective_language(DATABASE_PATH, chat_id, user_id)
+
+
+# Language Selection Keyboard
+def get_language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🇬🇧 English", callback_data="set_lang:en"),
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="set_lang:ru")
+        ]
+    ])
+
+
 # Google Books API fetcher
 async def fetch_google_books(query: str) -> List[Dict[str, str]]:
     url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(query)}&maxResults=3"
@@ -92,7 +108,6 @@ async def fetch_google_books(query: str) -> List[Dict[str, str]]:
             async with session.get(url, timeout=10) as resp:
                 if resp.status != 200:
                     logger.warning(f"Google Books API returned status {resp.status}")
-                    # Fallback construct if API limit reached or error
                     return [{
                         "title": query.title(),
                         "author": "Unknown Author",
@@ -134,35 +149,77 @@ async def fetch_google_books(query: str) -> List[Dict[str, str]]:
 @router.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject):
     await register_user_and_chat(message)
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else chat_id
+
+    # Check if language is selected yet
+    current_lang = await database.get_user_language(DATABASE_PATH, user_id) if message.chat.type == ChatType.PRIVATE else await database.get_chat_language(DATABASE_PATH, chat_id)
+
+    if not current_lang:
+        await message.answer(
+            t("select_language_prompt", "en"),
+            parse_mode="Markdown",
+            reply_markup=get_language_keyboard()
+        )
+        return
+
+    lang = current_lang
     args = command.args
 
     if args == "rate_new" and message.chat.type == ChatType.PRIVATE:
-        await send_next_unrated_book(message.from_user.id, message)
+        await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    welcome_text = (
-        "📚 **Welcome to BookVoter Bot!**\n\n"
-        "Commands:\n"
-        "• `/suggest [book title]` - Suggest a book for your group backlog.\n"
-        "• `/admin` - Group admin panel (Start vote, Finish reading, Stats).\n"
-        "• Click on book rating links sent in groups to rate backlog books privately!\n"
+    await message.answer(t("welcome_msg", lang), parse_mode="Markdown")
+
+
+@router.message(Command("language"))
+async def handle_language_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    await message.answer(
+        t("select_language_prompt", lang),
+        parse_mode="Markdown",
+        reply_markup=get_language_keyboard()
     )
-    await message.answer(welcome_text, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("set_lang:"))
+async def handle_set_language_callback(callback: CallbackQuery):
+    await register_user_and_chat(callback.message)
+    lang_code = callback.data.split(":")[1]
+    chat_id = callback.message.chat.id
+
+    if callback.message.chat.type == ChatType.PRIVATE:
+        await database.set_user_language(DATABASE_PATH, callback.from_user.id, lang_code)
+    else:
+        if not await is_admin(chat_id, callback.from_user.id):
+            await callback.answer(t("only_admins_allowed", lang_code), show_alert=True)
+            return
+        await database.set_chat_language(DATABASE_PATH, chat_id, lang_code)
+
+    await callback.answer(t("language_selected", lang_code))
+    await callback.message.edit_text(
+        t("language_selected", lang_code) + "\n\n" + t("welcome_msg", lang_code),
+        parse_mode="Markdown"
+    )
 
 
 @router.message(Command("suggest"))
 async def handle_suggest(message: Message, command: CommandObject):
     await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
     query = command.args
+
     if not query:
-        await message.answer("Please specify a book title, e.g.: `/suggest Dune`", parse_mode="Markdown")
+        await message.answer(t("suggest_usage", lang), parse_mode="Markdown")
         return
 
-    status_msg = await message.answer("Searching Google Books...")
+    status_msg = await message.answer(t("searching_google_books", lang))
     books = await fetch_google_books(query)
 
     if not books:
-        await status_msg.edit_text("No books found for your query. Please try a different title.")
+        await status_msg.edit_text(t("no_books_found", lang))
         return
 
     temp_key = f"sug_{message.chat.id}_{message.from_user.id}_{int(datetime.now().timestamp())}"
@@ -174,7 +231,7 @@ async def handle_suggest(message: Message, command: CommandObject):
         inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"sel_sug:{temp_key}:{idx}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-    await status_msg.edit_text("Select the matching book from Google Books results:", reply_markup=markup)
+    await status_msg.edit_text(t("select_matching_book", lang), reply_markup=markup)
 
 
 # Pending suggestions dictionary
@@ -184,9 +241,10 @@ pending_suggestions: Dict[str, List[Dict[str, str]]] = {}
 @router.callback_query(F.data.startswith("sel_sug:"))
 async def handle_suggestion_select(callback: CallbackQuery):
     await register_user_and_chat(callback.message)
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("Invalid selection.")
+        await callback.answer(t("selection_expired", lang))
         return
 
     temp_key, idx_str = parts[1], parts[2]
@@ -194,7 +252,7 @@ async def handle_suggestion_select(callback: CallbackQuery):
 
     books_list = pending_suggestions.get(temp_key)
     if not books_list or idx >= len(books_list):
-        await callback.answer("Selection expired or invalid. Please run /suggest again.")
+        await callback.answer(t("selection_expired", lang))
         return
 
     selected_book = books_list[idx]
@@ -216,26 +274,25 @@ async def handle_suggestion_select(callback: CallbackQuery):
     bot_info = await bot.get_me()
     rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
     rate_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐ Rate Backlog Books", url=rate_url)]
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
     ])
 
-    await callback.answer("Book saved to backlog!")
-    await callback.message.edit_text(
-        f"✅ **Book Added to Backlog!**\n\n"
-        f"📖 **Title:** {selected_book['title']}\n"
-        f"✍️ **Author:** {selected_book['author']}\n"
-        f"🏷️ **Genre:** {selected_book['genre']}\n\n"
-        f"Click below to rate unrated books in private messages!",
-        parse_mode="Markdown",
-        reply_markup=rate_markup
+    await callback.answer(t("book_saved_cb", lang))
+    text = (
+        f"{t('book_added_title', lang)}\n\n"
+        f"{t('book_field_title', lang, title=selected_book['title'])}\n"
+        f"{t('book_field_author', lang, author=selected_book['author'])}\n"
+        f"{t('book_field_genre', lang, genre=selected_book['genre'])}\n\n"
+        f"{t('click_below_to_rate', lang)}"
     )
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
 
 
 # Anti-Spam Rating in Private Messages
-async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any):
+async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any, lang: str):
     unrated_books = await database.get_unrated_backlog_books_for_user(DATABASE_PATH, user_tg_id)
     if not unrated_books:
-        text = "🎉 **All caught up!** You have rated all available backlog books for your groups."
+        text = t("all_caught_up_rating", lang)
         if isinstance(target_msg_or_user, Message):
             await target_msg_or_user.answer(text, parse_mode="Markdown")
         elif isinstance(target_msg_or_user, CallbackQuery):
@@ -243,17 +300,17 @@ async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any):
         return
 
     book = unrated_books[0]
-    rating_buttons = []
     row1 = [InlineKeyboardButton(text=str(i), callback_data=f"rate:{book['id']}:{i}") for i in range(1, 6)]
     row2 = [InlineKeyboardButton(text=str(i), callback_data=f"rate:{book['id']}:{i}") for i in range(6, 11)]
     markup = InlineKeyboardMarkup(inline_keyboard=[row1, row2])
 
-    msg_text = (
-        f"📚 **Group:** {book['chat_title']}\n\n"
-        f"📖 **Title:** {book['title']}\n"
-        f"✍️ **Author:** {book['author']}\n"
-        f"🏷️ **Genre:** {book['genre'] or 'N/A'}\n\n"
-        f"Rate this book from **1** (lowest) to **10** (highest):"
+    msg_text = t(
+        "rate_prompt_group",
+        lang,
+        chat_title=book['chat_title'],
+        title=book['title'],
+        author=book['author'],
+        genre=book['genre'] or 'N/A'
     )
 
     if isinstance(target_msg_or_user, Message):
@@ -264,6 +321,7 @@ async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any):
 
 @router.callback_query(F.data.startswith("rate:"))
 async def handle_rate_callback(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     parts = callback.data.split(":")
     if len(parts) != 3:
         await callback.answer()
@@ -271,10 +329,10 @@ async def handle_rate_callback(callback: CallbackQuery):
 
     book_id, score = int(parts[1]), int(parts[2])
     await database.save_backlog_rating(DATABASE_PATH, callback.from_user.id, book_id, score)
-    await callback.answer(f"Saved score: {score}/10")
+    await callback.answer(t("saved_score_cb", lang, score=score))
 
     # Proceed to send next unrated book
-    await send_next_unrated_book(callback.from_user.id, callback)
+    await send_next_unrated_book(callback.from_user.id, callback, lang)
 
 
 # --- Admin Panel & Voting ---
@@ -282,52 +340,53 @@ async def handle_rate_callback(callback: CallbackQuery):
 @router.message(Command("admin"))
 async def handle_admin(message: Message):
     await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
     if not await is_admin(message.chat.id, message.from_user.id):
-        await message.answer("⚠️ Only group administrators can open the admin panel.")
+        await message.answer(t("only_admins_allowed", lang))
         return
 
-    markup = get_admin_keyboard()
-    await message.answer("⚙️ **BookVoter Admin Panel**", parse_mode="Markdown", reply_markup=markup)
+    markup = get_admin_keyboard(lang)
+    await message.answer(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
 
 
-def get_admin_keyboard() -> InlineKeyboardMarkup:
+def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎲 Start Next Book Vote", callback_data="admin_start_vote")],
-        [InlineKeyboardButton(text="🏆 Finish Reading (Hall of Fame)", callback_data="admin_finish_reading")],
-        [InlineKeyboardButton(text="📊 Group Stats", callback_data="admin_group_stats")]
+        [InlineKeyboardButton(text=t("btn_start_vote", lang), callback_data="admin_start_vote")],
+        [InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")],
+        [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")]
     ])
 
 
 @router.callback_query(F.data == "admin_start_vote")
 async def handle_admin_start_vote(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     if not await is_admin(callback.message.chat.id, callback.from_user.id):
-        await callback.answer("Admin rights required.", show_alert=True)
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
 
     await callback.answer()
-    await start_vote_process(callback.message.chat.id)
+    await start_vote_process(callback.message.chat.id, lang)
 
 
 @router.message(Command("vote"))
 async def handle_vote_cmd(message: Message):
     await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
     if not await is_admin(message.chat.id, message.from_user.id):
-        await message.answer("⚠️ Only group administrators can start a vote.")
+        await message.answer(t("only_admins_allowed", lang))
         return
-    await start_vote_process(message.chat.id)
+    await start_vote_process(message.chat.id, lang)
 
 
-async def start_vote_process(chat_id: int):
-    # Check if poll is already running
+async def start_vote_process(chat_id: int, lang: str):
     active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
     if active_poll:
-        await bot.send_message(chat_id, "⚠️ A vote is already in progress for this group!")
+        await bot.send_message(chat_id, t("vote_in_progress_err", lang))
         return
 
-    # Select top 3 books from backlog
     top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
     if not top_books:
-        await bot.send_message(chat_id, "❌ No backlog books available to start a vote. Suggest some books with `/suggest` first!")
+        await bot.send_message(chat_id, t("no_backlog_books_err", lang))
         return
 
     book_ids = [b["id"] for b in top_books]
@@ -338,7 +397,7 @@ async def start_vote_process(chat_id: int):
 
     poll_msg = await bot.send_poll(
         chat_id=chat_id,
-        question="🗳️ Vote for the next book to read!",
+        question=t("poll_question", lang),
         options=options,
         is_anonymous=False,
         allows_multiple_answers=False
@@ -366,7 +425,7 @@ async def start_vote_process(chat_id: int):
 
     await bot.send_message(
         chat_id,
-        f"⏳ **Vote started!** The poll will automatically close in 24 hours.",
+        t("vote_started_msg", lang),
         parse_mode="Markdown"
     )
 
@@ -374,27 +433,27 @@ async def start_vote_process(chat_id: int):
 @router.message(Command("finish_vote"))
 async def handle_finish_vote_cmd(message: Message):
     await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
     if not await is_admin(message.chat.id, message.from_user.id):
-        await message.answer("⚠️ Only group administrators can manually finish a vote.")
+        await message.answer(t("only_admins_allowed", lang))
         return
     await finish_vote_process(message.chat.id)
 
 
 async def finish_vote_process(chat_id: int):
+    lang = await database.get_effective_language(DATABASE_PATH, chat_id)
     active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
     if not active_poll:
-        await bot.send_message(chat_id, "⚠️ No active vote found to finish.")
+        await bot.send_message(chat_id, t("no_active_vote_err", lang))
         return
 
     poll_message_id = active_poll["message_id"]
     options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
     voting_book_ids = list(options_mapping.values())
 
-    # Stop poll to get results
     try:
         stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
 
-        # Find winning option
         max_votes = -1
         winning_option_idx = 0
         for idx, option in enumerate(stopped_poll.options):
@@ -405,7 +464,6 @@ async def finish_vote_process(chat_id: int):
         winning_book_id = options_mapping.get(winning_option_idx, voting_book_ids[0])
     except Exception as e:
         logger.error(f"Error stopping poll in chat {chat_id}: {e}")
-        # Default to first book if stopping poll fails
         winning_book_id = voting_book_ids[0]
 
     await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
@@ -421,17 +479,14 @@ async def finish_vote_process(chat_id: int):
 
     await bot.send_message(
         chat_id,
-        f"🏆 **Voting Ended!**\n\n"
-        f"The winner is: **{win_title}** by **{win_author}**!\n"
-        f"📥 Fetching book file from library...",
+        t("voting_ended_title", lang, title=win_title, author=win_author),
         parse_mode="Markdown"
     )
 
-    # Trigger downloader.py subprocess
-    await execute_downloader_and_send(chat_id, winning_book_id, win_title)
+    await execute_downloader_and_send(chat_id, winning_book_id, win_title, lang)
 
 
-async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str):
+async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, lang: str):
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -449,50 +504,50 @@ async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: st
                 msg = await bot.send_document(
                     chat_id=chat_id,
                     document=document,
-                    caption=f"📚 Here is your book: **{book_title}**",
+                    caption=t("book_file_caption", lang, title=book_title),
                     parse_mode="Markdown"
                 )
                 file_id = msg.document.file_id if msg.document else ""
                 await database.mark_book_done(DATABASE_PATH, book_id, file_id)
 
-                # Delete local file after sending
                 try:
                     os.remove(file_path)
                 except Exception as ex:
                     logger.warning(f"Could not remove local file {file_path}: {ex}")
             else:
-                await bot.send_message(chat_id, "⚠️ File downloaded, but physical file was not found on server.")
+                await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
         else:
             err_msg = stderr.decode().strip()
             logger.error(f"Downloader failed for '{book_title}': {err_msg}")
-            await bot.send_message(chat_id, f"❌ File not found in library for **{book_title}**.", parse_mode="Markdown")
+            await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"Subprocess execution error: {e}")
-        await bot.send_message(chat_id, f"❌ An error occurred while downloading **{book_title}**.", parse_mode="Markdown")
+        await bot.send_message(chat_id, t("file_download_err", lang, title=book_title), parse_mode="Markdown")
 
 
 # --- Hall of Fame & Stats Callbacks ---
 
 @router.callback_query(F.data == "admin_finish_reading")
 async def handle_admin_finish_reading(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     if not await is_admin(callback.message.chat.id, callback.from_user.id):
-        await callback.answer("Admin rights required.", show_alert=True)
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
 
     chat_id = callback.message.chat.id
     current_book = await database.get_current_winning_or_reading_book(DATABASE_PATH, chat_id)
     if not current_book:
-        await callback.answer("No currently active book to finish.", show_alert=True)
+        await callback.answer(t("no_active_reading_err", lang), show_alert=True)
         return
 
     await database.add_to_hall_of_fame(DATABASE_PATH, current_book["id"], chat_id, final_rating=None)
-    await callback.answer("Book added to Hall of Fame!")
+    await callback.answer(t("added_to_hof_cb", lang))
 
     hof_list = await database.get_hall_of_fame(DATABASE_PATH, chat_id)
-    text = "🏆 **Hall of Fame Updated!**\n\n"
+    text = t("hof_title", lang)
     for idx, item in enumerate(hof_list, 1):
-        text += f"{idx}. **{item['title']}** by {item['author']}\n"
+        text += f"{idx}. **{item['title']}** ({item['author']})\n"
 
     await callback.message.edit_text(text, parse_mode="Markdown")
 
@@ -500,32 +555,24 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
 @router.callback_query(F.data == "admin_group_stats")
 async def handle_admin_group_stats(callback: CallbackQuery):
     chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
     stats = await database.get_group_stats(DATABASE_PATH, chat_id)
 
-    text = (
-        f"📊 **Group Statistics**\n\n"
-        f"• Backlog Books: **{stats['backlog_count']}**\n"
-        f"• Completed Books: **{stats['done_count']}**\n"
-        f"• Active Raters: **{stats['active_raters']}**"
-    )
+    text = t("group_stats_text", lang, **stats)
     await callback.answer()
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_admin_keyboard())
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_admin_keyboard(lang))
 
 
 # Superuser Monitoring
 @router.message(Command("sys_stats"))
 async def handle_sys_stats(message: Message):
     await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
     if message.from_user.id not in SUPER_ADMIN_IDS:
         return
 
     stats = await database.get_sys_stats(DATABASE_PATH)
-    text = (
-        f"🌐 **Global System Metrics**\n\n"
-        f"• Total Active Groups: **{stats['total_active_chats']}**\n"
-        f"• Total Unique Internal Users: **{stats['total_unique_users']}**\n"
-        f"• Total Downloaded Books: **{stats['total_downloaded_books']}**"
-    )
+    text = t("sys_stats_text", lang, **stats)
     await message.answer(text, parse_mode="Markdown")
 
 
