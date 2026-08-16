@@ -73,7 +73,7 @@ async def search_options_via_userbot(query_title: str) -> None:
         # Helper: Extract structured book blocks from library response text
         def parse_library_response_blocks(raw_text: str) -> list[dict]:
             blocks = []
-            # Split text by blank lines or download commands
+            # Split text by blank lines
             raw_blocks = re.split(r"\n\s*\n", raw_text)
             for block in raw_blocks:
                 lines = [line.strip() for line in block.splitlines() if line.strip()]
@@ -88,44 +88,55 @@ async def search_options_via_userbot(query_title: str) -> None:
                 if not filtered_lines:
                     continue
 
-                # Find download command in block
+                # Guaranteed structure from the library:
+                #   line[0]      = "Title - lang"   (always)
+                #   line[1..N-2] = description       (optional, may be absent)
+                #   line[N-1]    = "Author Name"     (always if N >= 2)
+                #   last line containing /downloadXXX = download command
+                #
+                # Pull the download line out first, then work with the rest.
                 dl_cmd = ""
-                non_cmd_lines = []
+                content_lines = []
                 for l in filtered_lines:
-                    cmd_m = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", l)
-                    if cmd_m:
+                    # FIX: correct character-class ranges (was a_zA_Z0_9 → a-zA-Z0-9)
+                    cmd_m = re.search(r"/(?:download|get|dl|d)[a-zA-Z0-9_]+", l)
+                    if cmd_m and not dl_cmd:
                         dl_cmd = cmd_m.group(0)
+                        # Keep any text on the line before the command
+                        remainder = l[:cmd_m.start()].strip()
+                        if remainder:
+                            content_lines.append(remainder)
                     else:
-                        non_cmd_lines.append(l)
+                        content_lines.append(l)
 
-                if non_cmd_lines:
-                    raw_title = non_cmd_lines[0]
-                    # Clean title by removing language suffixes like '- ru', '– ru', '[ru]', etc.
-                    clean_title = re.sub(r"\s*[-–—]?\s*(?:ru|en|litres|pdf|epub)\b.*$", "", raw_title, flags=re.IGNORECASE).strip()
-                    if not clean_title:
-                        clean_title = raw_title
+                if not content_lines:
+                    continue
 
+                # --- Title: first content line, strip language tag (e.g. "- ru") ---
+                raw_title = content_lines[0]
+                clean_title = re.sub(
+                    r"\s*[-–—]\s*(?:ru|en|de|fr|es|it|uk|pl|litres|pdf|epub)\b.*$",
+                    "", raw_title, flags=re.IGNORECASE
+                ).strip()
+                if not clean_title:
+                    clean_title = raw_title
+
+                # --- Author: last content line (second-to-last in original block) ---
+                author = content_lines[-1].strip() if len(content_lines) >= 2 else ""
+
+                # Sanity-check: reject if it looks like a system/service string
+                if author and any(w in author.lower() for w in ["скачать", "найдено", "запрос"]):
                     author = ""
-                    if len(non_cmd_lines) >= 2:
-                        author = non_cmd_lines[-1]
-                    elif " — " in clean_title or " - " in clean_title:
-                        parts = re.split(r"\s+[—\-]\s+", clean_title, 1)
-                        if len(parts) == 2:
-                            clean_title, author = parts[0].strip(), parts[1].strip()
 
-                    # Filter invalid author strings
-                    if author and (author.startswith("(") or "скачать" in author.lower() or "найдено" in author.lower()):
-                        author = ""
+                final_author = author if author else "Unknown Author"
 
-                    final_author = author if author else "Unknown Author"
-
-                    blocks.append({
-                        "title": clean_title,
-                        "author": final_author,
-                        "genre": "",
-                        "download_cmd": dl_cmd,
-                        "raw_label": f"{clean_title} — {final_author}" if final_author != "Unknown Author" else clean_title
-                    })
+                blocks.append({
+                    "title": clean_title,
+                    "author": final_author,
+                    "genre": "",
+                    "download_cmd": dl_cmd,
+                    "raw_label": f"{clean_title} — {final_author}" if final_author != "Unknown Author" else clean_title
+                })
 
             return blocks
 
@@ -292,8 +303,8 @@ async def search_and_download(title: str) -> None:
 
             # Case B: Message contains text list with download command (e.g., /download682541 or /download_123 or /get_456 or /d_789)
             if msg_text and not message.document:
-                # Find download command pattern like /download682541 or /download_123 or /dl_123 or /get_123 or /d_123
-                cmd_match = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", msg_text)
+                # Find download command pattern like /download682541
+                cmd_match = re.search(r"/(?:download|get|dl|d)[a-zA-Z0-9_]+", msg_text)
                 if cmd_match:
                     dl_cmd = cmd_match.group(0)
                     try:
