@@ -66,13 +66,14 @@ async def search_options_via_userbot(query_title: str) -> None:
 
         # 2. Send query directly with book title
         query_msg = await app.send_message(target_channel, query_title)
+        await asyncio.sleep(3)
 
         results = []
 
         # Helper: Extract structured book blocks from library response text
         def parse_library_response_blocks(raw_text: str) -> list[dict]:
             blocks = []
-            # Split text by blank lines
+            # Split text by blank lines or download commands
             raw_blocks = re.split(r"\n\s*\n", raw_text)
             for block in raw_blocks:
                 lines = [line.strip() for line in block.splitlines() if line.strip()]
@@ -87,117 +88,92 @@ async def search_options_via_userbot(query_title: str) -> None:
                 if not filtered_lines:
                     continue
 
-                # Guaranteed structure from the library:
-                #   line[0]      = "Title - lang"   (always)
-                #   line[1..N-2] = description       (optional, may be absent)
-                #   line[N-1]    = "Author Name"     (always if N >= 2)
-                #   last line containing /downloadXXX = download command
-                #
-                # Pull the download line out first, then work with the rest.
+                # Find download command in block
                 dl_cmd = ""
-                content_lines = []
+                non_cmd_lines = []
                 for l in filtered_lines:
-                    cmd_m = re.search(r"/(?:download|get|dl|d)[a-zA-Z0-9_]+", l)
-                    if cmd_m and not dl_cmd:
+                    cmd_m = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", l)
+                    if cmd_m:
                         dl_cmd = cmd_m.group(0)
-                        # Keep any text on the line before the command
-                        remainder = l[:cmd_m.start()].strip()
-                        if remainder:
-                            content_lines.append(remainder)
                     else:
-                        content_lines.append(l)
+                        non_cmd_lines.append(l)
 
-                if not content_lines:
-                    continue
+                if non_cmd_lines:
+                    raw_title = non_cmd_lines[0]
+                    # Clean title by removing language suffixes like '- ru', '– ru', '[ru]', etc.
+                    clean_title = re.sub(r"\s*[-–—]?\s*(?:ru|en|litres|pdf|epub)\b.*$", "", raw_title, flags=re.IGNORECASE).strip()
+                    if not clean_title:
+                        clean_title = raw_title
 
-                # --- Title: first content line, strip language tag (e.g. "- ru") ---
-                raw_title = content_lines[0]
-                clean_title = re.sub(
-                    r"\s*[-–—]\s*(?:ru|en|de|fr|es|it|uk|pl|litres|pdf|epub)\b.*$",
-                    "", raw_title, flags=re.IGNORECASE
-                ).strip()
-                if not clean_title:
-                    clean_title = raw_title
-
-                # --- Author: last content line (second-to-last in original block) ---
-                author = content_lines[-1].strip() if len(content_lines) >= 2 else ""
-
-                # Sanity-check: reject if it looks like a system/service string
-                if author and any(w in author.lower() for w in ["скачать", "найдено", "запрос"]):
                     author = ""
+                    if len(non_cmd_lines) >= 2:
+                        author = non_cmd_lines[-1]
+                    elif " — " in clean_title or " - " in clean_title:
+                        parts = re.split(r"\s+[—\-]\s+", clean_title, 1)
+                        if len(parts) == 2:
+                            clean_title, author = parts[0].strip(), parts[1].strip()
 
-                final_author = author if author else "Unknown Author"
+                    # Filter invalid author strings
+                    if author and (author.startswith("(") or "скачать" in author.lower() or "найдено" in author.lower()):
+                        author = ""
 
-                blocks.append({
-                    "title": clean_title,
-                    "author": final_author,
-                    "genre": "",
-                    "download_cmd": dl_cmd,
-                    "raw_label": f"{clean_title} — {final_author}" if final_author != "Unknown Author" else clean_title
-                })
+                    final_author = author if author else "Unknown Author"
+
+                    blocks.append({
+                        "title": clean_title,
+                        "author": final_author,
+                        "genre": "",
+                        "download_cmd": dl_cmd,
+                        "raw_label": f"{clean_title} — {final_author}" if final_author != "Unknown Author" else clean_title
+                    })
 
             return blocks
 
-        def try_parse_response(message) -> list[dict]:
-            """Try to extract book results from a single message."""
-            found = []
+        # 3. Intercept reply from library bot, filtering for search responses
+        async for message in app.get_chat_history(target_channel, limit=15):
+            if message.id <= query_msg.id:
+                continue
+
             msg_text = message.text or message.caption or ""
-
             if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
-                return found
+                continue
 
-            # Case A: Structured text with download commands
+            # Case A: Reply contains structured text blocks with download commands (like screenshot)
             if "скачать книгу:" in msg_text.lower() or "найдено:" in msg_text.lower() or "/download" in msg_text.lower():
-                parsed = parse_library_response_blocks(msg_text)
-                if parsed:
-                    return parsed[:5]
+                parsed_blocks = parse_library_response_blocks(msg_text)
+                if parsed_blocks:
+                    results = parsed_blocks[:5]
+                    break
 
-            # Case B: Inline keyboard buttons
+            # Case B: Reply contains inline buttons
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
                         parts = btn_text.split(" - ", 1) if " - " in btn_text else (btn_text.split(" — ", 1) if " — " in btn_text else [btn_text, ""])
                         author_val = parts[1].strip() if len(parts) > 1 and parts[1] else "Unknown Author"
-                        found.append({
+                        results.append({
                             "title": parts[0].strip(),
                             "author": author_val,
                             "genre": "",
                             "download_cmd": btn.callback_data or "",
                             "raw_label": btn_text
                         })
-                return found
+                if results:
+                    break
 
-            # Case C: Direct document
+            # Case C: Direct document returned
             if message.document:
                 file_name = message.document.file_name or query_title
                 base_name = os.path.splitext(file_name)[0]
-                found.append({
+                results.append({
                     "title": base_name,
                     "author": "Unknown Author",
                     "genre": "",
                     "download_cmd": "",
                     "raw_label": file_name
                 })
-
-            return found
-
-        # 3. Poll for library response — check every 2 seconds, up to 20 seconds total.
-        #    The library can be slow, especially for large result sets (200+ books).
-        MAX_WAIT_SEC = 20
-        POLL_INTERVAL = 2
-        elapsed = 0
-
-        while elapsed < MAX_WAIT_SEC and not results:
-            await asyncio.sleep(POLL_INTERVAL)
-            elapsed += POLL_INTERVAL
-
-            async for message in app.get_chat_history(target_channel, limit=10):
-                if message.id <= query_msg.id:
-                    break  # Reached messages older than our query — stop scanning
-                parsed = try_parse_response(message)
-                if parsed:
-                    results = parsed
+                if results:
                     break
 
         if not results:
@@ -316,8 +292,8 @@ async def search_and_download(title: str) -> None:
 
             # Case B: Message contains text list with download command (e.g., /download682541 or /download_123 or /get_456 or /d_789)
             if msg_text and not message.document:
-                # Find download command pattern like /download682541
-                cmd_match = re.search(r"/(?:download|get|dl|d)[a-zA-Z0-9_]+", msg_text)
+                # Find download command pattern like /download682541 or /download_123 or /dl_123 or /get_123 or /d_123
+                cmd_match = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", msg_text)
                 if cmd_match:
                     dl_cmd = cmd_match.group(0)
                     try:

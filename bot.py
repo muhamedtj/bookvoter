@@ -344,8 +344,13 @@ async def handle_suggest(message: Message, command: CommandObject):
 
     inline_keyboard = []
     for idx, b in enumerate(books):
-        label_author = f" ({b['author'][:20]})" if b.get('author') and b['author'].lower() != 'unknown author' else ""
-        btn_text = f"📖 {b['title'][:30]}{label_author}"
+        title_part = b['title'][:25] + "…" if len(b['title']) > 25 else b['title']
+        author_val = b.get('author', '')
+        if author_val and author_val.lower() not in ['unknown author', 'n/a', '']:
+            author_part = author_val[:12] + "…" if len(author_val) > 12 else author_val
+            btn_text = f"📖 {title_part} — {author_part}"
+        else:
+            btn_text = f"📖 {title_part}"
         inline_keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"sel_sug:{temp_key}:{idx}")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -410,7 +415,8 @@ async def handle_suggestion_select(callback: CallbackQuery):
             ]
         ])
 
-        await callback.answer()
+        alert_msg = f"📖 {selected_book['title']}" if len(selected_book['title']) <= 40 else f"📖 {selected_book['title'][:37]}…"
+        await callback.answer(alert_msg, show_alert=True)
         await callback.message.edit_text(
             t("select_genre_prompt", lang, title=selected_book["title"], author=selected_book["author"]),
             parse_mode="Markdown",
@@ -436,7 +442,8 @@ async def handle_suggestion_select(callback: CallbackQuery):
         [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
     ])
 
-    await callback.answer(t("book_saved_cb", lang))
+    alert_full_info = f"✅ «{selected_book['title']}» ({selected_book['author']})"
+    await callback.answer(alert_full_info[:200], show_alert=True)
     text = (
         t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
         t("click_below_to_rate", lang)
