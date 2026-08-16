@@ -35,6 +35,7 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(lock2.locked())
 
         self.assertFalse(lock2.locked())
+
     async def asyncSetUp(self):
         self.db_path = "test_run.sqlite"
         if os.path.exists(self.db_path):
@@ -71,8 +72,8 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
 
     async def test_books_ratings_and_backlog_full(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=1001, username="alice", full_name="Alice Smith")
-        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi", suggested_by_tg_id=1001)
-        b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre="Fantasy", suggested_by_tg_id=1001)
+        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre=None, suggested_by_tg_id=1001)
+        b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre=None, suggested_by_tg_id=1001)
 
         # Verify full backlog information query
         full_backlog = await database.get_backlog_books_full_info(self.db_path, chat_id=-100)
@@ -96,33 +97,43 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         audit_departed = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[])
         self.assertEqual(len(audit_departed), 2)
 
-    async def test_genre_rotation(self):
+    async def test_top_backlog_books_for_vote(self):
+        # Add a previously finished book with a genre
         b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
         await database.update_books_status(self.db_path, [b0_id], "won")
 
+        # Add new backlog books (with or without genre)
         b1_id = await database.add_book(self.db_path, chat_id=-100, title="Hyperion", author="Dan Simmons", genre="Sci-Fi")
         b2_id = await database.add_book(self.db_path, chat_id=-100, title="Name of the Wind", author="Patrick Rothfuss", genre="Fantasy")
 
-        result = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=1)
-        self.assertEqual(result["books"][0]["id"], b2_id)
-        self.assertEqual(result["excluded_genre"], "Sci-Fi")
+        # Rate b1 higher than b2
+        await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b1_id, score=9)
+        await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b2_id, score=7)
+
+        # Verify that get_top_backlog_books_for_vote picks b1 first despite its genre matching the previously won book
+        result = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=2)
+        self.assertEqual(len(result["books"]), 2)
+        self.assertEqual(result["books"][0]["id"], b1_id)
+        self.assertEqual(result["books"][1]["id"], b2_id)
+        self.assertIsNone(result["excluded_genre"])
 
     async def test_superadmin_stats_detailed(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")
-        b_id = await database.add_book(self.db_path, chat_id=-200, title="1984", author="George Orwell", genre="Dystopia", suggested_by_tg_id=2001)
+        b_id = await database.add_book(self.db_path, chat_id=-200, title="1984", author="George Orwell", genre=None, suggested_by_tg_id=2001)
         await database.save_backlog_rating(self.db_path, tg_id=2001, book_id=b_id, score=10)
 
         sa_stats = await database.get_superadmin_stats_detailed(self.db_path, days=30)
         self.assertIn("total_voters", sa_stats)
         self.assertEqual(sa_stats["total_voters"], 1)
         self.assertEqual(len(sa_stats["top_books"]), 1)
+        self.assertNotIn("top_genres", sa_stats)
 
     async def test_post_reading_ratings_and_hof(self):
         u1_id = await database.get_or_create_user(self.db_path, tg_id=3001, username="user1")
         u2_id = await database.get_or_create_user(self.db_path, tg_id=3002, username="user2")
         u3_id = await database.get_or_create_user(self.db_path, tg_id=3003, username="user3")
 
-        b_id = await database.add_book(self.db_path, chat_id=-300, title="1984", author="George Orwell", genre="Dystopia")
+        b_id = await database.add_book(self.db_path, chat_id=-300, title="1984", author="George Orwell", genre=None)
         await database.update_books_status(self.db_path, [b_id], "won")
 
         # Save post read ratings

@@ -179,7 +179,6 @@ async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List
         return [{
             "title": query.title(),
             "author": "Library Bot",
-            "genre": t("general_genre", lang),
             "raw_label": query.title()
         }]
     except Exception as e:
@@ -269,7 +268,7 @@ async def handle_backlog_command(message: Message):
         s_name = b["suggestor_name"] or (f"@{b['suggestor_username']}" if b["suggestor_username"] else "N/A")
         text += (
             f"{idx}. **{b['title']}** — {b['author']}\n"
-            f"   🏷️ {b['genre'] or 'N/A'} | ⭐ {round(b['wish_score'], 1)}/10 | 👤 Suggested by: {s_name}\n\n"
+            f"   ⭐ {round(b['wish_score'], 1)}/10 | 👤 Suggested by: {s_name}\n\n"
         )
 
     await message.answer(text, parse_mode="Markdown")
@@ -402,43 +401,12 @@ async def handle_suggestion_select(callback: CallbackQuery):
         await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
         return
 
-    # If genre is missing or empty, ask user to select a genre via inline buttons
-    if not selected_book.get("genre") or selected_book["genre"].strip().lower() in ["general", "без жанра", ""]:
-        # Save selection details in pending_genre_selections
-        genre_key = f"gen_{chat_id}_{user_id}_{int(datetime.now().timestamp())}"
-        pending_genre_selections[genre_key] = selected_book
-        pending_suggestions.pop(temp_key, None)
-
-        genre_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("genre_scifi", lang), callback_data=f"set_gen:{genre_key}:Sci-Fi"),
-                InlineKeyboardButton(text=t("genre_classics", lang), callback_data=f"set_gen:{genre_key}:Classics")
-            ],
-            [
-                InlineKeyboardButton(text=t("genre_business", lang), callback_data=f"set_gen:{genre_key}:Business"),
-                InlineKeyboardButton(text=t("genre_detective", lang), callback_data=f"set_gen:{genre_key}:Detective")
-            ],
-            [
-                InlineKeyboardButton(text=t("genre_nonfiction", lang), callback_data=f"set_gen:{genre_key}:Non-Fiction"),
-                InlineKeyboardButton(text=t("genre_other", lang), callback_data=f"set_gen:{genre_key}:General")
-            ]
-        ])
-
-        alert_msg = f"📖 {selected_book['title']}" if len(selected_book['title']) <= 40 else f"📖 {selected_book['title'][:37]}…"
-        await callback.answer(alert_msg, show_alert=True)
-        await callback.message.edit_text(
-            t("select_genre_prompt", lang, title=selected_book["title"], author=selected_book["author"]),
-            parse_mode="Markdown",
-            reply_markup=genre_markup
-        )
-        return
-
     book_id = await database.add_book(
         DATABASE_PATH,
         chat_id=chat_id,
         title=selected_book["title"],
         author=selected_book["author"],
-        genre=selected_book["genre"],
+        genre=None,
         suggested_by_tg_id=user_id,
         file_id=selected_book.get("download_cmd") or None
     )
@@ -453,55 +421,6 @@ async def handle_suggestion_select(callback: CallbackQuery):
 
     alert_full_info = f"✅ «{selected_book['title']}» ({selected_book['author']})"
     await callback.answer(alert_full_info[:200], show_alert=True)
-    text = (
-        t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
-        t("click_below_to_rate", lang)
-    )
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
-
-
-# Pending genre selections dictionary
-pending_genre_selections: Dict[str, Dict[str, str]] = {}
-
-
-@router.callback_query(F.data.startswith("set_gen:"))
-async def handle_set_genre_callback(callback: CallbackQuery):
-    await register_user_and_chat(callback.message)
-    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
-    parts = callback.data.split(":", 2)
-    if len(parts) != 3:
-        await callback.answer()
-        return
-
-    genre_key, chosen_genre = parts[1], parts[2]
-    selected_book = pending_genre_selections.get(genre_key)
-
-    if not selected_book:
-        await callback.answer(t("selection_expired", lang))
-        return
-
-    chat_id = callback.message.chat.id
-    user_id = callback.from_user.id
-
-    book_id = await database.add_book(
-        DATABASE_PATH,
-        chat_id=chat_id,
-        title=selected_book["title"],
-        author=selected_book["author"],
-        genre=chosen_genre,
-        suggested_by_tg_id=user_id,
-        file_id=selected_book.get("download_cmd") or None
-    )
-
-    pending_genre_selections.pop(genre_key, None)
-
-    bot_info = await bot.get_me()
-    rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
-    rate_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
-    ])
-
-    await callback.answer(t("book_saved_cb", lang))
     text = (
         t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
         t("click_below_to_rate", lang)
@@ -530,8 +449,7 @@ async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any, lang:
         lang,
         chat_title=book['chat_title'],
         title=book['title'],
-        author=book['author'],
-        genre=book['genre'] or 'N/A'
+        author=book['author']
     )
 
     if isinstance(target_msg_or_user, Message):
@@ -666,41 +584,8 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
         await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
         return
 
-    genres = await database.get_available_genres_in_backlog(DATABASE_PATH, chat_id)
-
-    keyboard = [
-        [InlineKeyboardButton(text=t("all_genres_btn", lang), callback_data="vote_genre:all")]
-    ]
-    for g in genres:
-        keyboard.append([InlineKeyboardButton(text=f"🏷️ {g[:30]}", callback_data=f"vote_genre:{g}")])
-
-    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")])
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-    await callback.answer()
-    await callback.message.edit_text(t("select_genre_for_vote", lang), parse_mode="Markdown", reply_markup=markup)
-
-
-@router.callback_query(F.data.startswith("vote_genre:"))
-async def handle_vote_genre_selected(callback: CallbackQuery):
-    chat_id = callback.message.chat.id
-    lang = await get_lang(chat_id, callback.from_user.id)
-    if not await is_admin(chat_id, callback.from_user.id):
-        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
-        return
-
-    genre_param = callback.data.split(":", 1)[1]
-    excluded_note = ""
-
-    if genre_param.lower() == "all":
-        result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
-        books = result_dict["books"]
-        if result_dict.get("excluded_genre"):
-            excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
-    else:
-        all_genre_books = await database.get_backlog_books_by_genre(DATABASE_PATH, chat_id, genre_param)
-        books = all_genre_books[:3]
-
+    result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+    books = result_dict["books"]
     if not books:
         await callback.answer(t("no_backlog_books_err", lang), show_alert=True)
         return
@@ -709,7 +594,7 @@ async def handle_vote_genre_selected(callback: CallbackQuery):
     await launch_poll_for_books(chat_id, books, lang)
 
     await callback.message.edit_text(
-        t("vote_started_msg", lang) + excluded_note,
+        t("vote_started_msg", lang),
         parse_mode="Markdown"
     )
 
@@ -881,7 +766,6 @@ async def send_superadmin_response(lang: str, days: Optional[int], target_msg_or
     filter_label = t("filter_30_days", lang) if days == 30 else t("filter_all_time", lang)
 
     top_books_str = "\n".join([f"• {b['title']} ({b['author']}) — ⭐ {b['score']}/10" for b in stats["top_books"]]) or "N/A"
-    top_genres_str = "\n".join([f"• {g['genre']}: ⭐ {g['score']}/10" for g in stats["top_genres"]]) or "N/A"
 
     text = t(
         "sys_stats_text",
@@ -890,8 +774,7 @@ async def send_superadmin_response(lang: str, days: Optional[int], target_msg_or
         total_active_chats=stats["total_active_chats"],
         total_voters=stats["total_voters"],
         total_books_suggested=stats["total_books_suggested"],
-        top_books_str=top_books_str,
-        top_genres_str=top_genres_str
+        top_books_str=top_books_str
     )
 
     markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -1008,12 +891,8 @@ async def handle_vote_cmd(message: Message):
         await message.answer(t("no_backlog_books_err", lang))
         return
 
-    excluded_note = ""
-    if result_dict.get("excluded_genre"):
-        excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
-
     await launch_poll_for_books(message.chat.id, top_books, lang)
-    await message.answer(t("vote_started_msg", lang) + excluded_note, parse_mode="Markdown")
+    await message.answer(t("vote_started_msg", lang), parse_mode="Markdown")
 
 
 @router.message(Command("finish_vote"))
@@ -1291,8 +1170,7 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
         "finish_reading_card_title",
         lang,
         title=current_book["title"],
-        author=current_book["author"],
-        genre=current_book["genre"] or t("general_genre", lang)
+        author=current_book["author"]
     )
 
     await bot.send_message(chat_id, card_text, parse_mode="Markdown", reply_markup=markup)
