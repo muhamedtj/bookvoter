@@ -70,20 +70,51 @@ async def search_options_via_userbot(query_title: str) -> None:
 
         results = []
 
-        # Helper: Extract author and title from text lines
-        def parse_title_author(raw_text: str) -> tuple[str, str]:
-            text = raw_text.strip()
-            # Split by dash or em-dash
-            if " — " in text:
-                parts = text.split(" — ", 1)
-                return parts[0].strip(), parts[1].strip()
-            elif " - " in text:
-                parts = text.split(" - ", 1)
-                return parts[0].strip(), parts[1].strip()
-            elif " by " in text.lower():
-                parts = re.split(r"\s+by\s+", text, flags=re.IGNORECASE, maxsplit=1)
-                return parts[0].strip(), parts[1].strip()
-            return text, ""
+        # Helper: Extract structured book blocks from library response text
+        def parse_library_response_blocks(raw_text: str) -> list[dict]:
+            blocks = []
+            # Split text by blank lines or download commands
+            raw_blocks = re.split(r"\n\s*\n", raw_text)
+            for block in raw_blocks:
+                lines = [line.strip() for line in block.splitlines() if line.strip()]
+                # Skip header/footer lines
+                filtered_lines = [
+                    l for l in lines
+                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "найдено:", "мы нашли именно то"])
+                ]
+                if not filtered_lines:
+                    continue
+
+                # Find download command in block
+                dl_cmd = ""
+                non_cmd_lines = []
+                for l in filtered_lines:
+                    cmd_m = re.search(r"/(?:download|get|dl|d)_[a_zA_Z0_9_]+|/download\d+", l)
+                    if cmd_m:
+                        dl_cmd = cmd_m.group(0)
+                    else:
+                        non_cmd_lines.append(l)
+
+                if non_cmd_lines:
+                    raw_title = non_cmd_lines[0]
+                    # Strip language tags like '- ru' or '[ru]'
+                    clean_title = re.sub(r"\s*[-–—]\s*(?:ru|en|litres).*", "", raw_title, flags=re.IGNORECASE).strip()
+
+                    author = ""
+                    if len(non_cmd_lines) >= 3:
+                        author = non_cmd_lines[-1]
+                    elif len(non_cmd_lines) == 2:
+                        author = non_cmd_lines[1]
+
+                    blocks.append({
+                        "title": clean_title,
+                        "author": author if author and not author.startswith("(") else query_title.title(),
+                        "genre": "",
+                        "download_cmd": dl_cmd,
+                        "raw_label": f"{clean_title} — {author}" if author else clean_title
+                    })
+
+            return blocks
 
         # 3. Intercept reply from library bot, filtering for search responses
         async for message in app.get_chat_history(target_channel, limit=15):
@@ -91,51 +122,29 @@ async def search_options_via_userbot(query_title: str) -> None:
                 continue
 
             msg_text = message.text or message.caption or ""
-
-            # Skip welcome / start messages
             if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
                 continue
 
-            # Case A: Reply contains inline buttons (multiple book choices)
+            # Case A: Reply contains structured text blocks with download commands (like screenshot)
+            if "скачать книгу:" in msg_text.lower() or "найдено:" in msg_text.lower() or "/download" in msg_text.lower():
+                parsed_blocks = parse_library_response_blocks(msg_text)
+                if parsed_blocks:
+                    results = parsed_blocks[:5]
+                    break
+
+            # Case B: Reply contains inline buttons
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
-                        p_title, p_author = parse_title_author(btn_text)
+                        parts = btn_text.split(" - ", 1) if " - " in btn_text else [btn_text, ""]
                         results.append({
-                            "title": p_title,
-                            "author": p_author or query_title.title(),
+                            "title": parts[0].strip(),
+                            "author": parts[1].strip() if len(parts) > 1 and parts[1] else query_title.title(),
                             "genre": "",
+                            "download_cmd": btn.callback_data or "",
                             "raw_label": btn_text
                         })
-                if results:
-                    break
-
-            # Case B: Reply is text message listing search results
-            if msg_text and not (message.from_user and message.from_user.is_self):
-                lines = [line.strip() for line in msg_text.splitlines() if line.strip()]
-                filtered_lines = [
-                    l for l in lines
-                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "воспользуйтесь", "найдено:"])
-                ]
-
-                # Check for Line 1: Title, Line 2: Author pattern
-                i = 0
-                while i < len(filtered_lines) and len(results) < 5:
-                    line = filtered_lines[i]
-                    p_title, p_author = parse_title_author(line)
-                    if not p_author and (i + 1 < len(filtered_lines)) and not filtered_lines[i+1].startswith("/"):
-                        p_author = filtered_lines[i+1]
-                        i += 1
-
-                    results.append({
-                        "title": p_title,
-                        "author": p_author or "Unknown Author",
-                        "genre": "",
-                        "raw_label": line
-                    })
-                    i += 1
-
                 if results:
                     break
 
@@ -143,11 +152,11 @@ async def search_options_via_userbot(query_title: str) -> None:
             if message.document:
                 file_name = message.document.file_name or query_title
                 base_name = os.path.splitext(file_name)[0]
-                p_title, p_author = parse_title_author(base_name)
                 results.append({
-                    "title": p_title,
-                    "author": p_author or "Unknown Author",
+                    "title": base_name,
+                    "author": "Unknown Author",
                     "genre": "",
+                    "download_cmd": "",
                     "raw_label": file_name
                 })
                 if results:
@@ -208,6 +217,33 @@ async def search_and_download(title: str) -> None:
                 await asyncio.sleep(2)
             except Exception as start_err:
                 logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
+
+        # If title is already a direct download command (e.g. /download338051 or /get_123)
+        if title.startswith("/"):
+            try:
+                query_msg = await app.send_message(target_channel, title)
+                await asyncio.sleep(4)
+            except Exception as send_cmd_err:
+                logging.warning(f"Could not send direct download command to target {target_channel}: {send_cmd_err}")
+
+            q_id = query_msg.id if query_msg else 0
+            async for message in app.get_chat_history(target_channel, limit=10):
+                if message.id <= q_id:
+                    continue
+                if message.document:
+                    file_name = message.document.file_name or ""
+                    ext = os.path.splitext(file_name)[1].lower()
+                    if ext in [".epub", ".pdf"]:
+                        downloaded_path = await app.download_media(
+                            message,
+                            file_name=os.path.join(DOWNLOAD_DIR, file_name)
+                        )
+                        break
+
+            if downloaded_path and os.path.exists(downloaded_path):
+                abs_path = os.path.abspath(downloaded_path)
+                print(abs_path)
+                sys.exit(0)
 
         query_msg = None
         try:

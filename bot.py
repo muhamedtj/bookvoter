@@ -424,7 +424,8 @@ async def handle_suggestion_select(callback: CallbackQuery):
         title=selected_book["title"],
         author=selected_book["author"],
         genre=selected_book["genre"],
-        suggested_by_tg_id=user_id
+        suggested_by_tg_id=user_id,
+        file_id=selected_book.get("download_cmd") or None
     )
 
     pending_suggestions.pop(temp_key, None)
@@ -472,7 +473,8 @@ async def handle_set_genre_callback(callback: CallbackQuery):
         title=selected_book["title"],
         author=selected_book["author"],
         genre=chosen_genre,
-        suggested_by_tg_id=user_id
+        suggested_by_tg_id=user_id,
+        file_id=selected_book.get("download_cmd") or None
     )
 
     pending_genre_selections.pop(genre_key, None)
@@ -1044,6 +1046,7 @@ async def finish_vote_process(chat_id: int):
 
     win_title = winning_book["title"]
     win_author = winning_book["author"]
+    win_file_id = winning_book.get("file_id")
 
     await bot.send_message(
         chat_id,
@@ -1051,7 +1054,12 @@ async def finish_vote_process(chat_id: int):
         parse_mode="Markdown"
     )
 
-    query_str = f"{win_title} {win_author}".strip() if win_author and win_author.lower() != "n/a" else win_title
+    # Use exact direct download_cmd if stored, else query string
+    if win_file_id and win_file_id.startswith("/"):
+        query_str = win_file_id
+    else:
+        query_str = f"{win_title} {win_author}".strip() if win_author and win_author.lower() != "n/a" else win_title
+
     await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
 
 

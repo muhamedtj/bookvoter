@@ -233,7 +233,8 @@ async def add_book(
     title: str,
     author: str,
     genre: Optional[str] = None,
-    suggested_by_tg_id: Optional[int] = None
+    suggested_by_tg_id: Optional[int] = None,
+    file_id: Optional[str] = None
 ) -> int:
     """Add a new book suggestion with status='backlog'."""
     async with aiosqlite.connect(db_path) as db:
@@ -245,9 +246,9 @@ async def add_book(
             internal_id = await get_or_create_user(db_path, suggested_by_tg_id)
 
         cursor = await db.execute("""
-            INSERT INTO books (chat_id, title, author, genre, status, suggested_by)
-            VALUES (?, ?, ?, ?, 'backlog', ?)
-        """, (chat_id, title, author, genre, internal_id))
+            INSERT INTO books (chat_id, title, author, genre, status, suggested_by, file_id)
+            VALUES (?, ?, ?, ?, 'backlog', ?, ?)
+        """, (chat_id, title, author, genre, internal_id, file_id))
         await db.commit()
         return cursor.lastrowid
 
