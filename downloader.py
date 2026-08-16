@@ -66,7 +66,6 @@ async def search_options_via_userbot(query_title: str) -> None:
 
         # 2. Send query directly with book title
         query_msg = await app.send_message(target_channel, query_title)
-        await asyncio.sleep(3)
 
         results = []
 
@@ -98,7 +97,6 @@ async def search_options_via_userbot(query_title: str) -> None:
                 dl_cmd = ""
                 content_lines = []
                 for l in filtered_lines:
-                    # FIX: correct character-class ranges (was a_zA_Z0_9 → a-zA-Z0-9)
                     cmd_m = re.search(r"/(?:download|get|dl|d)[a-zA-Z0-9_]+", l)
                     if cmd_m and not dl_cmd:
                         dl_cmd = cmd_m.group(0)
@@ -140,51 +138,66 @@ async def search_options_via_userbot(query_title: str) -> None:
 
             return blocks
 
-        # 3. Intercept reply from library bot, filtering for search responses
-        async for message in app.get_chat_history(target_channel, limit=15):
-            if message.id <= query_msg.id:
-                continue
-
+        def try_parse_response(message) -> list[dict]:
+            """Try to extract book results from a single message."""
+            found = []
             msg_text = message.text or message.caption or ""
+
             if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
-                continue
+                return found
 
-            # Case A: Reply contains structured text blocks with download commands (like screenshot)
+            # Case A: Structured text with download commands
             if "скачать книгу:" in msg_text.lower() or "найдено:" in msg_text.lower() or "/download" in msg_text.lower():
-                parsed_blocks = parse_library_response_blocks(msg_text)
-                if parsed_blocks:
-                    results = parsed_blocks[:5]
-                    break
+                parsed = parse_library_response_blocks(msg_text)
+                if parsed:
+                    return parsed[:5]
 
-            # Case B: Reply contains inline buttons
+            # Case B: Inline keyboard buttons
             if message.reply_markup and message.reply_markup.inline_keyboard:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
                         parts = btn_text.split(" - ", 1) if " - " in btn_text else (btn_text.split(" — ", 1) if " — " in btn_text else [btn_text, ""])
                         author_val = parts[1].strip() if len(parts) > 1 and parts[1] else "Unknown Author"
-                        results.append({
+                        found.append({
                             "title": parts[0].strip(),
                             "author": author_val,
                             "genre": "",
                             "download_cmd": btn.callback_data or "",
                             "raw_label": btn_text
                         })
-                if results:
-                    break
+                return found
 
-            # Case C: Direct document returned
+            # Case C: Direct document
             if message.document:
                 file_name = message.document.file_name or query_title
                 base_name = os.path.splitext(file_name)[0]
-                results.append({
+                found.append({
                     "title": base_name,
                     "author": "Unknown Author",
                     "genre": "",
                     "download_cmd": "",
                     "raw_label": file_name
                 })
-                if results:
+
+            return found
+
+        # 3. Poll for library response — check every 2 seconds, up to 20 seconds total.
+        #    The library can be slow, especially for large result sets (200+ books).
+        MAX_WAIT_SEC = 20
+        POLL_INTERVAL = 2
+        elapsed = 0
+
+        while elapsed < MAX_WAIT_SEC and not results:
+            await asyncio.sleep(POLL_INTERVAL)
+            elapsed += POLL_INTERVAL
+
+            async for message in app.get_chat_history(target_channel, limit=10):
+                if message.id <= query_msg.id:
+                    break  # Reached messages older than our query — stop scanning
+                parsed = try_parse_response(message)
+                if parsed:
+                    results = parsed
                     break
 
         if not results:
