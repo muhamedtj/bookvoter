@@ -141,6 +141,16 @@ async def get_lang(chat_id: int, user_id: Optional[int] = None) -> str:
     return await database.get_effective_language(DATABASE_PATH, chat_id, user_id)
 
 
+# Welcome Keyboard
+def get_welcome_keyboard(lang: str, bot_username: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_how_it_works", lang), callback_data="show_help")],
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{bot_username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
+    ])
+
+
 # Language Selection Keyboard
 def get_language_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -202,6 +212,40 @@ def get_download_lock(chat_id: int, book_id: int) -> asyncio.Lock:
 
 # --- Handlers ---
 
+@router.callback_query(F.data == "show_help")
+async def handle_show_help_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    bot_info = await bot.get_me()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{bot_info.username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_to_welcome")]
+    ])
+    await callback.message.edit_text(t("how_it_works_text", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data == "back_to_welcome")
+async def handle_back_to_welcome_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang, bot_info.username)
+    await callback.message.edit_text(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.message(Command("help"))
+async def handle_help_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    bot_info = await bot.get_me()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{bot_info.username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
+    ])
+    await message.answer(t("how_it_works_text", lang), parse_mode="Markdown", reply_markup=markup)
+
+
 @router.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject):
     await register_user_and_chat(message)
@@ -225,11 +269,8 @@ async def handle_start(message: Message, command: CommandObject):
         await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
-        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
-    ])
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang, bot_info.username)
 
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
 
@@ -312,11 +353,8 @@ async def handle_set_language_callback(callback: CallbackQuery):
         await database.set_chat_language(DATABASE_PATH, chat_id, lang_code)
 
     await callback.answer(t("language_selected", lang_code))
-    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_open_control_panel", lang_code), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
-        [InlineKeyboardButton(text=t("btn_report_error", lang_code), callback_data="report_error")]
-    ])
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang_code, bot_info.username)
     await callback.message.edit_text(
         t("language_selected", lang_code) + "\n\n" + t("welcome_msg", lang_code),
         parse_mode="Markdown",

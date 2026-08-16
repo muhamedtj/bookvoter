@@ -45,6 +45,36 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
 
+    async def test_welcome_keyboard_and_help(self):
+        # Test keyboard button order
+        kb = bot.get_welcome_keyboard("ru", "test_bot")
+        inline_rows = kb.inline_keyboard
+        self.assertEqual(len(inline_rows), 4)
+        self.assertEqual(inline_rows[0][0].text, i18n.t("btn_how_it_works", "ru"))
+        self.assertEqual(inline_rows[0][0].callback_data, "show_help")
+        self.assertEqual(inline_rows[1][0].text, i18n.t("btn_rate_backlog", "ru"))
+        self.assertEqual(inline_rows[1][0].url, "https://t.me/test_bot?start=rate_new")
+        self.assertEqual(inline_rows[2][0].text, i18n.t("btn_open_control_panel", "ru"))
+        self.assertEqual(inline_rows[2][0].callback_data, "open_control_panel")
+        self.assertEqual(inline_rows[3][0].text, i18n.t("btn_report_error", "ru"))
+        self.assertEqual(inline_rows[3][0].callback_data, "report_error")
+
+        # Test help text content
+        help_ru = i18n.t("how_it_works_text", "ru")
+        self.assertIn("Как работает BookVoter", help_ru)
+        self.assertIn("/suggest", help_ru)
+        self.assertIn("Зал славы", help_ru)
+        # Verify no mention of genres / genre rotation / Google Books
+        self.assertNotIn("жанр", help_ru.lower())
+        self.assertNotIn("google", help_ru.lower())
+
+        help_en = i18n.t("how_it_works_text", "en")
+        self.assertIn("How BookVoter Works", help_en)
+        self.assertIn("/suggest", help_en)
+        self.assertIn("Hall of Fame", help_en)
+        self.assertNotIn("genre", help_en.lower())
+        self.assertNotIn("google", help_en.lower())
+
     async def test_language_management(self):
         lang_default = await database.get_effective_language(self.db_path, chat_id=-1001)
         self.assertEqual(lang_default, "en")
