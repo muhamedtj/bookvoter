@@ -6,9 +6,35 @@ from datetime import datetime
 
 import database
 import bot
+import downloader
 import i18n
 
+class DummyButton:
+    def __init__(self, text, callback_data):
+        self.text = text
+        self.callback_data = callback_data
+
 class TestBookVoter(unittest.IsolatedAsyncioTestCase):
+    def test_select_best_button_priority(self):
+        # Test scenario: fb2, epub, mobi -> epub selected
+        k1 = [[DummyButton("FB2", "dl_fb2"), DummyButton("EPUB", "dl_epub"), DummyButton("MOBI", "dl_mobi")]]
+        btn1 = downloader.select_best_button(k1)
+        self.assertEqual(btn1.text, "EPUB")
+
+        # Test scenario: epub absent, fb2 present -> fb2 selected
+        k2 = [[DummyButton("FB2", "dl_fb2"), DummyButton("PDF", "dl_pdf")]]
+        btn2 = downloader.select_best_button(k2)
+        self.assertEqual(btn2.text, "FB2")
+
+    async def test_download_locks(self):
+        lock1 = bot.get_download_lock(chat_id=100, book_id=1)
+        lock2 = bot.get_download_lock(chat_id=100, book_id=1)
+        self.assertIs(lock1, lock2)
+
+        async with lock1:
+            self.assertTrue(lock2.locked())
+
+        self.assertFalse(lock2.locked())
     async def asyncSetUp(self):
         self.db_path = "test_run.sqlite"
         if os.path.exists(self.db_path):

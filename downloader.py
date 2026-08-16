@@ -4,6 +4,7 @@ import re
 import json
 import asyncio
 import logging
+from typing import Any
 from dotenv import load_dotenv
 from pyrogram import Client
 
@@ -195,6 +196,40 @@ async def search_options_via_userbot(query_title: str) -> None:
         await app.stop()
 
 
+async def wait_for_document_or_response(app: Client, target_channel: Any, request_msg_id: int, timeout_seconds: int = 30):
+    """Poll for new messages after request_msg_id until a document or relevant text/markup response is received."""
+    start_time = asyncio.get_event_loop().time()
+    while asyncio.get_event_loop().time() - start_time < timeout_seconds:
+        async for message in app.get_chat_history(target_channel, limit=10):
+            if message.id <= request_msg_id:
+                continue
+            msg_text = message.text or message.caption or ""
+            if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
+                continue
+            return message
+        await asyncio.sleep(1)
+    return None
+
+def select_best_button(keyboard_rows) -> Any:
+    """Select format button with priority: epub > fb2 > mobi > pdf > other."""
+    candidates = []
+    for row in keyboard_rows:
+        for btn in row:
+            txt = btn.text.lower() if btn.text else ""
+            cb = btn.callback_data or ""
+            candidates.append((btn, txt, cb))
+
+    if not candidates:
+        return None
+
+    priorities = ["epub", "fb2", "mobi", "pdf"]
+    for prio in priorities:
+        for btn, txt, cb in candidates:
+            if prio in txt or prio in cb.lower():
+                return btn
+
+    return candidates[0][0]
+
 async def search_and_download(title: str) -> None:
     if not API_ID or not API_HASH or not SESSION_STRING or not CHANNEL_ID:
         sys.stderr.write("Error: Missing required environment variables (API_ID, API_HASH, SESSION_STRING, CHANNEL_ID).\n")
@@ -232,105 +267,76 @@ async def search_and_download(title: str) -> None:
             except Exception as start_err:
                 logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
 
-        # If title is already a direct download command (e.g. /download338051 or /get_123)
+        # Case 1: Direct command starting with '/'
         if title.startswith("/"):
             try:
-                query_msg = await app.send_message(target_channel, title)
-                await asyncio.sleep(4)
+                cmd_msg = await app.send_message(target_channel, title)
             except Exception as send_cmd_err:
-                logging.warning(f"Could not send direct download command to target {target_channel}: {send_cmd_err}")
+                sys.stderr.write(f"Failed to send direct download command '{title}': {send_cmd_err}\n")
+                sys.exit(1)
 
-            q_id = query_msg.id if query_msg else 0
-            async for message in app.get_chat_history(target_channel, limit=10):
-                if message.id <= q_id:
-                    continue
-                if message.document:
-                    file_name = message.document.file_name or ""
-                    ext = os.path.splitext(file_name)[1].lower()
-                    if ext in [".epub", ".pdf"]:
-                        downloaded_path = await app.download_media(
-                            message,
-                            file_name=os.path.join(DOWNLOAD_DIR, file_name)
-                        )
-                        break
+            resp_msg = await wait_for_document_or_response(app, target_channel, cmd_msg.id, timeout_seconds=30)
+            if resp_msg and resp_msg.document:
+                file_name = resp_msg.document.file_name or "downloaded_book"
+                downloaded_path = await app.download_media(
+                    resp_msg,
+                    file_name=os.path.join(DOWNLOAD_DIR, file_name)
+                )
 
             if downloaded_path and os.path.exists(downloaded_path):
-                abs_path = os.path.abspath(downloaded_path)
-                print(abs_path)
+                print(os.path.abspath(downloaded_path))
                 sys.exit(0)
+            else:
+                sys.stderr.write(f"Timeout or file not received for direct command: {title}\n")
+                sys.exit(1)
 
-        query_msg = None
+        # Case 2: General text query search
         try:
             query_msg = await app.send_message(target_channel, title)
-            await asyncio.sleep(4)
         except Exception as send_title_err:
-            logging.warning(f"Could not send title query to target {target_channel}: {send_title_err}")
+            sys.stderr.write(f"Failed to send query '{title}': {send_title_err}\n")
+            sys.exit(1)
 
-        q_id = query_msg.id if query_msg else 0
+        resp_msg = await wait_for_document_or_response(app, target_channel, query_msg.id, timeout_seconds=30)
 
-        async for message in app.get_chat_history(target_channel, limit=15):
-            if message.id <= q_id:
-                continue
+        if not resp_msg:
+            sys.stderr.write(f"Timeout waiting for response to query: {title}\n")
+            sys.exit(1)
 
-            msg_text = message.text or message.caption or ""
-            if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
-                continue
+        # Check inline buttons format choice
+        if resp_msg.reply_markup and resp_msg.reply_markup.inline_keyboard:
+            best_btn = select_best_button(resp_msg.reply_markup.inline_keyboard)
+            if best_btn and best_btn.callback_data:
+                cb_msg_id = resp_msg.id
+                await app.request_callback_answer(
+                    chat_id=resp_msg.chat.id,
+                    message_id=resp_msg.id,
+                    callback_data=best_btn.callback_data
+                )
+                resp_msg = await wait_for_document_or_response(app, target_channel, cb_msg_id, timeout_seconds=30)
 
-            # Case A: Reply has inline button for download/selection
-            if message.reply_markup and message.reply_markup.inline_keyboard:
-                try:
-                    first_button = message.reply_markup.inline_keyboard[0][0]
-                    if first_button.callback_data:
-                        await app.request_callback_answer(
-                            chat_id=message.chat.id,
-                            message_id=message.id,
-                            callback_data=first_button.callback_data
-                        )
-                        await asyncio.sleep(4)
-                except Exception as cb_err:
-                    logging.warning(f"Failed to trigger inline button: {cb_err}")
+        # Check text response with download command
+        msg_text = (resp_msg.text or resp_msg.caption or "") if resp_msg else ""
+        if resp_msg and not resp_msg.document and msg_text:
+            cmd_match = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", msg_text)
+            if cmd_match:
+                dl_cmd = cmd_match.group(0)
+                sub_cmd_msg = await app.send_message(target_channel, dl_cmd)
+                resp_msg = await wait_for_document_or_response(app, target_channel, sub_cmd_msg.id, timeout_seconds=30)
 
-            # Case B: Message contains text list with download command (e.g., /download682541 or /download_123 or /get_456 or /d_789)
-            if msg_text and not message.document:
-                # Find download command pattern like /download682541 or /download_123 or /dl_123 or /get_123 or /d_123
-                cmd_match = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", msg_text)
-                if cmd_match:
-                    dl_cmd = cmd_match.group(0)
-                    try:
-                        cmd_msg = await app.send_message(target_channel, dl_cmd)
-                        await asyncio.sleep(4)
-                    except Exception as cmd_err:
-                        logging.warning(f"Failed to send download command {dl_cmd}: {cmd_err}")
-
-            # Check direct document attached to message
-            if message.document:
-                file_name = message.document.file_name or ""
-                ext = os.path.splitext(file_name)[1].lower()
-                if ext in [".epub", ".pdf"]:
-                    downloaded_path = await app.download_media(
-                        message,
-                        file_name=os.path.join(DOWNLOAD_DIR, file_name)
-                    )
-                    break
-
-        if not downloaded_path:
-            async for message in app.get_chat_history(target_channel, limit=5):
-                if message.document:
-                    file_name = message.document.file_name or ""
-                    ext = os.path.splitext(file_name)[1].lower()
-                    if ext in [".epub", ".pdf"]:
-                        downloaded_path = await app.download_media(
-                            message,
-                            file_name=os.path.join(DOWNLOAD_DIR, file_name)
-                        )
-                        break
+        # Process document
+        if resp_msg and resp_msg.document:
+            file_name = resp_msg.document.file_name or f"{title}.epub"
+            downloaded_path = await app.download_media(
+                resp_msg,
+                file_name=os.path.join(DOWNLOAD_DIR, file_name)
+            )
 
         if downloaded_path and os.path.exists(downloaded_path):
-            abs_path = os.path.abspath(downloaded_path)
-            print(abs_path)
+            print(os.path.abspath(downloaded_path))
             sys.exit(0)
         else:
-            sys.stderr.write(f"File not found in library for title: {title}\n")
+            sys.stderr.write(f"File not found in library for query: {title}\n")
             sys.exit(1)
 
     except Exception as e:

@@ -5,7 +5,7 @@ import logging
 import asyncio
 import traceback
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -189,6 +189,15 @@ async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List
 
 # In-memory poll vote counter for tracking non-anonymous PollAnswer votes per option
 poll_votes_tracker: Dict[str, Dict[int, int]] = {}
+
+# Process-local locks to prevent parallel downloading of the same book in the same chat
+download_locks: Dict[Tuple[int, int], asyncio.Lock] = {}
+
+def get_download_lock(chat_id: int, book_id: int) -> asyncio.Lock:
+    key = (chat_id, book_id)
+    if key not in download_locks:
+        download_locks[key] = asyncio.Lock()
+    return download_locks[key]
 
 
 # --- Handlers ---
@@ -1061,55 +1070,66 @@ async def finish_vote_process(chat_id: int):
         parse_mode="Markdown"
     )
 
-    # Use exact direct download_cmd if stored, else query string
-    if win_file_id and win_file_id.startswith("/"):
-        query_str = win_file_id
+    # Determine exact search query / download command
+    invalid_authors = {"unknown author", "library bot", "n/a", "none", ""}
+    clean_author = win_author.strip() if win_author else ""
+    if clean_author.lower() in invalid_authors:
+        clean_author = ""
+
+    if win_file_id and win_file_id.strip().startswith("/"):
+        query_str = win_file_id.strip()
     else:
-        query_str = f"{win_title} {win_author}".strip() if win_author and win_author.lower() != "n/a" else win_title
+        query_str = f"{win_title} {clean_author}".strip() if clean_author else win_title.strip()
 
     await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
 
 
 async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, query_str: str, lang: str):
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "downloader.py",
-            "download",
-            query_str,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await proc.communicate()
+    lock = get_download_lock(chat_id, book_id)
+    if lock.locked():
+        logger.info(f"Download already in progress for chat {chat_id}, book {book_id}. Skipping duplicate request.")
+        return
 
-        if proc.returncode == 0:
-            output_lines = stdout.decode().strip().splitlines()
-            file_path = output_lines[-1] if output_lines else ""
-            if os.path.exists(file_path):
-                document = FSInputFile(file_path)
-                msg = await bot.send_document(
-                    chat_id=chat_id,
-                    document=document,
-                    caption=t("book_file_caption", lang, title=book_title),
-                    parse_mode="Markdown"
-                )
-                file_id = msg.document.file_id if msg.document else ""
-                await database.mark_book_done(DATABASE_PATH, book_id, file_id)
+    async with lock:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "downloader.py",
+                "download",
+                query_str,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
 
-                try:
-                    os.remove(file_path)
-                except Exception as ex:
-                    logger.warning(f"Could not remove local file {file_path}: {ex}")
+            if proc.returncode == 0:
+                output_lines = stdout.decode().strip().splitlines()
+                file_path = output_lines[-1] if output_lines else ""
+                if os.path.exists(file_path):
+                    document = FSInputFile(file_path)
+                    msg = await bot.send_document(
+                        chat_id=chat_id,
+                        document=document,
+                        caption=t("book_file_caption", lang, title=book_title),
+                        parse_mode="Markdown"
+                    )
+                    file_id = msg.document.file_id if msg.document else ""
+                    await database.mark_book_done(DATABASE_PATH, book_id, file_id)
+
+                    try:
+                        os.remove(file_path)
+                    except Exception as ex:
+                        logger.warning(f"Could not remove local file {file_path}: {ex}")
+                else:
+                    await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
             else:
+                err_msg = stderr.decode().strip()
+                logger.error(f"Downloader failed for '{book_title}': {err_msg}")
                 await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
-        else:
-            err_msg = stderr.decode().strip()
-            logger.error(f"Downloader failed for '{book_title}': {err_msg}")
-            await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
 
-    except Exception as e:
-        logger.error(f"Subprocess execution error: {e}")
-        await bot.send_message(chat_id, t("file_download_err", lang, title=book_title), parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Subprocess execution error: {e}")
+            await bot.send_message(chat_id, t("file_download_err", lang, title=book_title), parse_mode="Markdown")
 
 
 # --- Hall of Fame & Post-Reading Rating Handlers ---
