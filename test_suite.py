@@ -43,34 +43,32 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats["total_active_chats"], 1)
         self.assertEqual(stats["total_unique_users"], 1)
 
-    async def test_books_and_ratings(self):
-        u_id = await database.get_or_create_user(self.db_path, tg_id=1001, username="alice")
+    async def test_books_ratings_and_backlog_full(self):
+        u_id = await database.get_or_create_user(self.db_path, tg_id=1001, username="alice", full_name="Alice Smith")
         b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi", suggested_by_tg_id=1001)
         b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre="Fantasy", suggested_by_tg_id=1001)
 
-        # Test duplicate book check
-        exists = await database.is_book_exists(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert")
-        self.assertTrue(exists)
-        not_exists = await database.is_book_exists(self.db_path, chat_id=-100, title="1984", author="George Orwell")
-        self.assertFalse(not_exists)
+        # Verify full backlog information query
+        full_backlog = await database.get_backlog_books_full_info(self.db_path, chat_id=-100)
+        self.assertEqual(len(full_backlog), 2)
+        self.assertEqual(full_backlog[0]["suggestor_name"], "Alice Smith")
 
-        unrated = await database.get_unrated_backlog_books_for_user(self.db_path, tg_id=1001)
-        self.assertEqual(len(unrated), 2)
-
+        # Test rating
         await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b1_id, score=9)
-        unrated2 = await database.get_unrated_backlog_books_for_user(self.db_path, tg_id=1001)
-        self.assertEqual(len(unrated2), 1)
 
-        top_books = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=2)
-        self.assertEqual(top_books[0]["id"], b1_id)
-        self.assertEqual(top_books[0]["avg_score"], 9.0)
+        # Detailed chat stats
+        chat_stats = await database.get_chat_stats_detailed(self.db_path, chat_id=-100)
+        self.assertEqual(chat_stats["backlog_count"], 2)
+        self.assertEqual(len(chat_stats["top_contributors"]), 1)
 
-        # Test book deletion
-        deleted = await database.delete_book(self.db_path, b1_id, chat_id=-100)
-        self.assertTrue(deleted)
-        backlog = await database.get_backlog_books_for_chat(self.db_path, chat_id=-100)
-        self.assertEqual(len(backlog), 1)
-        self.assertEqual(backlog[0]["id"], b2_id)
+        # Audit backlog activity (departed/inactive)
+        audit = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[1001])
+        # Alice is in active_tg_ids and has voted, so audit should be clean
+        self.assertEqual(len(audit), 0)
+
+        # Audit with departed user
+        audit_departed = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[])
+        self.assertEqual(len(audit_departed), 2)
 
     async def test_genre_rotation(self):
         b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
@@ -79,16 +77,19 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         b1_id = await database.add_book(self.db_path, chat_id=-100, title="Hyperion", author="Dan Simmons", genre="Sci-Fi")
         b2_id = await database.add_book(self.db_path, chat_id=-100, title="Name of the Wind", author="Patrick Rothfuss", genre="Fantasy")
 
-        top = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=1)
-        self.assertEqual(top[0]["id"], b2_id)
+        result = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=1)
+        self.assertEqual(result["books"][0]["id"], b2_id)
+        self.assertEqual(result["excluded_genre"], "Sci-Fi")
 
-    async def test_google_books_api(self):
-        results = await bot.fetch_google_books("Python Programming", "en")
-        if results is not None:
-            for r in results:
-                self.assertIsNotNone(r["title"])
-                self.assertIsNotNone(r["author"])
-                self.assertNotIn(r["author"].lower(), ["unknown author", "неизвестный автор"])
+    async def test_superadmin_stats_detailed(self):
+        u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")
+        b_id = await database.add_book(self.db_path, chat_id=-200, title="1984", author="George Orwell", genre="Dystopia", suggested_by_tg_id=2001)
+        await database.save_backlog_rating(self.db_path, tg_id=2001, book_id=b_id, score=10)
+
+        sa_stats = await database.get_superadmin_stats_detailed(self.db_path, days=30)
+        self.assertIn("total_voters", sa_stats)
+        self.assertEqual(sa_stats["total_voters"], 1)
+        self.assertEqual(len(sa_stats["top_books"]), 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,6 +5,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 import aiohttp
@@ -100,7 +101,7 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
 # Helper: Fetch English edition metadata for author/genre enrichment
 async def fetch_english_enrichment(session: aiohttp.ClientSession, title: str) -> Dict[str, Any]:
     try:
-        url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(title)}&langRestrict=en&maxResults=1"
+        url = f"https://www.googleapis.com/books/v1/volumes?q={quote(title)}&langRestrict=en&maxResults=1"
         if GOOGLE_BOOKS_API_KEY:
             url += f"&key={GOOGLE_BOOKS_API_KEY}"
         async with session.get(url, timeout=5) as resp:
@@ -122,7 +123,7 @@ async def fetch_english_enrichment(session: aiohttp.ClientSession, title: str) -
 
 # Google Books API fetcher with strict validation
 async def fetch_google_books(query: str, lang: str = "en") -> Optional[List[Dict[str, str]]]:
-    url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(query)}&maxResults=5"
+    url = f"https://www.googleapis.com/books/v1/volumes?q={quote(query)}&maxResults=5"
     if GOOGLE_BOOKS_API_KEY:
         url += f"&key={GOOGLE_BOOKS_API_KEY}"
 
@@ -133,7 +134,7 @@ async def fetch_google_books(query: str, lang: str = "en") -> Optional[List[Dict
             async with session.get(url, timeout=10) as resp:
                 if resp.status != 200:
                     logger.warning(f"Google Books API returned status {resp.status}")
-                    return None  # Signal API/network failure
+                    return None
 
                 data = await resp.json()
                 items = data.get("items", [])
@@ -177,6 +178,10 @@ async def fetch_google_books(query: str, lang: str = "en") -> Optional[List[Dict
             return None
 
 
+# In-memory poll vote counter for tracking non-anonymous PollAnswer votes per option
+poll_votes_tracker: Dict[str, Dict[int, int]] = {}
+
+
 # --- Handlers ---
 
 @router.message(CommandStart())
@@ -185,7 +190,6 @@ async def handle_start(message: Message, command: CommandObject):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else chat_id
 
-    # Check if language is selected yet
     current_lang = await database.get_user_language(DATABASE_PATH, user_id) if message.chat.type == ChatType.PRIVATE else await database.get_chat_language(DATABASE_PATH, chat_id)
 
     if not current_lang:
@@ -203,13 +207,33 @@ async def handle_start(message: Message, command: CommandObject):
         await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    # Inline control buttons under welcome message
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
         [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
     ])
 
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.message(Command("backlog"))
+async def handle_backlog_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    books = await database.get_backlog_books_full_info(DATABASE_PATH, message.chat.id)
+
+    if not books:
+        await message.answer(t("backlog_empty", lang), parse_mode="Markdown")
+        return
+
+    text = t("backlog_list_header", lang)
+    for idx, b in enumerate(books, 1):
+        s_name = b["suggestor_name"] or (f"@{b['suggestor_username']}" if b["suggestor_username"] else "N/A")
+        text += (
+            f"{idx}. **{b['title']}** — {b['author']}\n"
+            f"   🏷️ {b['genre'] or 'N/A'} | ⭐ {round(b['wish_score'], 1)}/10 | 👤 Suggested by: {s_name}\n\n"
+        )
+
+    await message.answer(text, parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "open_control_panel")
@@ -318,7 +342,6 @@ async def handle_suggestion_select(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
 
-    # Check for duplicate book in this group chat
     already_exists = await database.is_book_exists(
         DATABASE_PATH,
         chat_id=chat_id,
@@ -339,7 +362,6 @@ async def handle_suggestion_select(callback: CallbackQuery):
         suggested_by_tg_id=user_id
     )
 
-    # Clean up pending
     pending_suggestions.pop(temp_key, None)
 
     bot_info = await bot.get_me()
@@ -402,11 +424,49 @@ async def handle_rate_callback(callback: CallbackQuery):
     await database.save_backlog_rating(DATABASE_PATH, callback.from_user.id, book_id, score)
     await callback.answer(t("saved_score_cb", lang, score=score))
 
-    # Proceed to send next unrated book
     await send_next_unrated_book(callback.from_user.id, callback, lang)
 
 
-# --- Real-time Poll Answer / Vote Monitoring (> 50% majority auto-closure) ---
+# --- Real-time Poll & PollAnswer Monitoring (> 50% majority auto-closure) ---
+
+@router.poll_answer()
+async def handle_poll_answer(poll_answer: PollAnswer):
+    active_poll = await database.get_active_poll_by_poll_id(DATABASE_PATH, poll_answer.poll_id)
+    if not active_poll:
+        return
+
+    poll_id = poll_answer.poll_id
+    chat_id = active_poll["chat_id"]
+
+    if poll_id not in poll_votes_tracker:
+        poll_votes_tracker[poll_id] = {}
+
+    user_votes = poll_votes_tracker[poll_id]
+    if poll_answer.option_ids:
+        user_votes[poll_answer.user.id] = poll_answer.option_ids[0]
+    else:
+        user_votes.pop(poll_answer.user.id, None)
+
+    total_votes = len(user_votes)
+    if total_votes > 0:
+        counts: Dict[int, int] = {}
+        for opt_id in user_votes.values():
+            counts[opt_id] = counts.get(opt_id, 0) + 1
+
+        for opt_id, count in counts.items():
+            if count / total_votes > 0.5:
+                logger.info(f"Poll option achieved majority (>50%) in chat {chat_id}. Finishing vote automatically...")
+                poll_votes_tracker.pop(poll_id, None)
+                job_id = f"poll_end_{chat_id}_{active_poll['message_id']}"
+                try:
+                    if scheduler.get_job(job_id):
+                        scheduler.remove_job(job_id)
+                except Exception as e:
+                    logger.warning(f"Failed to remove scheduled job {job_id}: {e}")
+
+                await finish_vote_process(chat_id)
+                break
+
 
 @router.poll()
 async def handle_poll_update(poll: Poll):
@@ -423,12 +483,10 @@ async def handle_poll_update(poll: Poll):
     if total_votes == 0:
         return
 
-    # Check if any option has > 50% of the votes
     for option in poll.options:
         if option.voter_count / total_votes > 0.5:
             logger.info(f"Poll option achieved majority (>50%) in chat {chat_id}. Finishing vote automatically...")
-
-            # Cancel scheduled 24h job
+            poll_votes_tracker.pop(poll.id, None)
             job_id = f"poll_end_{chat_id}_{active_poll['message_id']}"
             try:
                 if scheduler.get_job(job_id):
@@ -436,12 +494,11 @@ async def handle_poll_update(poll: Poll):
             except Exception as e:
                 logger.warning(f"Failed to remove scheduled job {job_id}: {e}")
 
-            # Complete vote process early
             await finish_vote_process(chat_id)
             break
 
 
-# --- Admin Panel & Voting ---
+# --- Admin Panel & Control Methods ---
 
 @router.message(Command("bookvoter"))
 @router.message(Command("admin"))
@@ -462,6 +519,7 @@ def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=t("btn_finish_vote_early", lang), callback_data="admin_finish_vote_early")],
         [InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")],
         [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
+        [InlineKeyboardButton(text=t("btn_audit_backlog", lang), callback_data="admin_audit_backlog")],
         [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")]
     ])
 
@@ -503,10 +561,13 @@ async def handle_vote_genre_selected(callback: CallbackQuery):
         return
 
     genre_param = callback.data.split(":", 1)[1]
+    excluded_note = ""
 
-    # Fetch books sorted by average score
     if genre_param.lower() == "all":
-        books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+        result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+        books = result_dict["books"]
+        if result_dict.get("excluded_genre"):
+            excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
     else:
         all_genre_books = await database.get_backlog_books_by_genre(DATABASE_PATH, chat_id, genre_param)
         books = all_genre_books[:3]
@@ -516,13 +577,10 @@ async def handle_vote_genre_selected(callback: CallbackQuery):
         return
 
     await callback.answer()
-
-    # Launch poll with selected top books
     await launch_poll_for_books(chat_id, books, lang)
 
-    # Update callback message
     await callback.message.edit_text(
-        t("vote_started_msg", lang),
+        t("vote_started_msg", lang) + excluded_note,
         parse_mode="Markdown"
     )
 
@@ -550,7 +608,6 @@ async def launch_poll_for_books(chat_id: int, top_books: List[Dict[str, Any]], l
         options_json=json.dumps(options_mapping)
     )
 
-    # Schedule 24h job
     job_id = f"poll_end_{chat_id}_{poll_msg.message_id}"
     run_time = datetime.now() + timedelta(hours=24)
     scheduler.add_job(
@@ -562,6 +619,166 @@ async def launch_poll_for_books(chat_id: int, top_books: List[Dict[str, Any]], l
         replace_existing=True
     )
 
+
+@router.callback_query(F.data == "admin_audit_backlog")
+async def handle_admin_audit_backlog(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    active_tg_ids = []
+    books = await database.get_backlog_books_full_info(DATABASE_PATH, chat_id)
+    for b in books:
+        if b.get("suggestor_tg_id"):
+            try:
+                member = await bot.get_chat_member(chat_id, b["suggestor_tg_id"])
+                if member.status not in ("left", "kicked"):
+                    active_tg_ids.append(b["suggestor_tg_id"])
+            except Exception:
+                pass
+
+    audit_items = await database.audit_backlog_activity(DATABASE_PATH, chat_id, active_tg_ids)
+
+    if not audit_items:
+        await callback.answer()
+        await callback.message.edit_text(t("audit_clean", lang), parse_mode="Markdown")
+        return
+
+    text = t("audit_title", lang)
+    for item in audit_items:
+        s_name = item["suggestor_name"] or (f"@{item['suggestor_username']}" if item["suggestor_username"] else "User")
+        reasons_str = ", ".join([t(f"reason_{r}", lang) for r in item["reasons"]])
+        text += f"• **{item['title']}** ({item['author']})\n  👤 Suggested by: {s_name}\n  ⚠️ {reasons_str}\n\n"
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
+        [InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")]
+    ])
+
+    await callback.answer()
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+# --- Local Chat Statistics with Filters ---
+
+@router.message(Command("chat_stats"))
+async def handle_chat_stats_cmd(message: Message):
+    await register_user_and_chat(message)
+    chat_id = message.chat.id
+    lang = await get_lang(chat_id, message.from_user.id if message.from_user else None)
+    await send_chat_stats_response(chat_id, lang, days=None, target_msg_or_cb=message)
+
+
+@router.callback_query(F.data == "admin_group_stats")
+@router.callback_query(F.data.startswith("stats_chat:"))
+async def handle_chat_stats_cb(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+
+    days = None
+    if callback.data.startswith("stats_chat:"):
+        period = callback.data.split(":")[1]
+        if period == "30":
+            days = 30
+
+    await callback.answer()
+    await send_chat_stats_response(chat_id, lang, days=days, target_msg_or_cb=callback)
+
+
+async def send_chat_stats_response(chat_id: int, lang: str, days: Optional[int], target_msg_or_cb: Any):
+    stats = await database.get_chat_stats_detailed(DATABASE_PATH, chat_id, days=days)
+    filter_label = t("filter_30_days", lang) if days == 30 else t("filter_all_time", lang)
+
+    contributors_str = "\n".join([f"• {c['name']}: {c['count']} books" for c in stats["top_contributors"]]) or "N/A"
+    voters_str = "\n".join([f"• {v['name']}: {v['count']} votes" for v in stats["top_voters"]]) or "N/A"
+
+    text = t(
+        "group_stats_text",
+        lang,
+        filter_label=filter_label,
+        backlog_count=stats["backlog_count"],
+        done_count=stats["done_count"],
+        avg_club_rating=stats["avg_club_rating"],
+        contributors_str=contributors_str,
+        voters_str=voters_str
+    )
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"{'✅ ' if not days else ''}{t('filter_all_time', lang)}", callback_data="stats_chat:all"),
+            InlineKeyboardButton(text=f"{'✅ ' if days == 30 else ''}{t('filter_30_days', lang)}", callback_data="stats_chat:30")
+        ],
+        [InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")]
+    ])
+
+    if isinstance(target_msg_or_cb, Message):
+        await target_msg_or_cb.answer(text, parse_mode="Markdown", reply_markup=markup)
+    elif isinstance(target_msg_or_cb, CallbackQuery):
+        await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+# --- Global Superadmin Dashboard (/superadmin) ---
+
+@router.message(Command("superadmin"))
+@router.message(Command("sys_stats"))
+async def handle_superadmin_cmd(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    if message.from_user.id not in SUPER_ADMIN_IDS:
+        return
+
+    await send_superadmin_response(lang, days=None, target_msg_or_cb=message)
+
+
+@router.callback_query(F.data.startswith("stats_super:"))
+async def handle_superadmin_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    if callback.from_user.id not in SUPER_ADMIN_IDS:
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    period = callback.data.split(":")[1]
+    days = 30 if period == "30" else None
+
+    await callback.answer()
+    await send_superadmin_response(lang, days=days, target_msg_or_cb=callback)
+
+
+async def send_superadmin_response(lang: str, days: Optional[int], target_msg_or_cb: Any):
+    stats = await database.get_superadmin_stats_detailed(DATABASE_PATH, days=days)
+    filter_label = t("filter_30_days", lang) if days == 30 else t("filter_all_time", lang)
+
+    top_books_str = "\n".join([f"• {b['title']} ({b['author']}) — ⭐ {b['score']}/10" for b in stats["top_books"]]) or "N/A"
+    top_genres_str = "\n".join([f"• {g['genre']}: ⭐ {g['score']}/10" for g in stats["top_genres"]]) or "N/A"
+
+    text = t(
+        "sys_stats_text",
+        lang,
+        filter_label=filter_label,
+        total_active_chats=stats["total_active_chats"],
+        total_voters=stats["total_voters"],
+        total_books_suggested=stats["total_books_suggested"],
+        top_books_str=top_books_str,
+        top_genres_str=top_genres_str
+    )
+
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"{'✅ ' if not days else ''}{t('filter_all_time', lang)}", callback_data="stats_super:all"),
+            InlineKeyboardButton(text=f"{'✅ ' if days == 30 else ''}{t('filter_30_days', lang)}", callback_data="stats_super:30")
+        ]
+    ])
+
+    if isinstance(target_msg_or_cb, Message):
+        await target_msg_or_cb.answer(text, parse_mode="Markdown", reply_markup=markup)
+    elif isinstance(target_msg_or_cb, CallbackQuery):
+        await target_msg_or_cb.message.edit_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+# Administrative Early Finish / Delete Callbacks
 
 @router.callback_query(F.data == "admin_finish_vote_early")
 async def handle_admin_finish_vote_early(callback: CallbackQuery):
@@ -576,7 +793,6 @@ async def handle_admin_finish_vote_early(callback: CallbackQuery):
         await callback.answer(t("no_active_vote_err", lang), show_alert=True)
         return
 
-    # Cancel scheduled job
     job_id = f"poll_end_{chat_id}_{active_poll['message_id']}"
     try:
         if scheduler.get_job(job_id):
@@ -633,7 +849,6 @@ async def handle_del_book_action(callback: CallbackQuery):
     else:
         await callback.answer("Error deleting book.", show_alert=True)
 
-    # Return to admin main menu
     markup = get_admin_keyboard(lang)
     await callback.message.edit_text(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
 
@@ -658,13 +873,18 @@ async def handle_vote_cmd(message: Message):
         await message.answer(t("only_admins_allowed", lang))
         return
 
-    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
+    result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
+    top_books = result_dict["books"]
     if not top_books:
         await message.answer(t("no_backlog_books_err", lang))
         return
 
+    excluded_note = ""
+    if result_dict.get("excluded_genre"):
+        excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
+
     await launch_poll_for_books(message.chat.id, top_books, lang)
-    await message.answer(t("vote_started_msg", lang), parse_mode="Markdown")
+    await message.answer(t("vote_started_msg", lang) + excluded_note, parse_mode="Markdown")
 
 
 @router.message(Command("finish_vote"))
@@ -788,30 +1008,6 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
         text += f"{idx}. **{item['title']}** ({item['author']})\n"
 
     await callback.message.edit_text(text, parse_mode="Markdown")
-
-
-@router.callback_query(F.data == "admin_group_stats")
-async def handle_admin_group_stats(callback: CallbackQuery):
-    chat_id = callback.message.chat.id
-    lang = await get_lang(chat_id, callback.from_user.id)
-    stats = await database.get_group_stats(DATABASE_PATH, chat_id)
-
-    text = t("group_stats_text", lang, **stats)
-    await callback.answer()
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=get_admin_keyboard(lang))
-
-
-# Superuser Monitoring
-@router.message(Command("sys_stats"))
-async def handle_sys_stats(message: Message):
-    await register_user_and_chat(message)
-    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
-    if message.from_user.id not in SUPER_ADMIN_IDS:
-        return
-
-    stats = await database.get_sys_stats(DATABASE_PATH)
-    text = t("sys_stats_text", lang, **stats)
-    await message.answer(text, parse_mode="Markdown")
 
 
 async def main():

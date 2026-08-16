@@ -22,7 +22,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "📚 **Welcome to BookVoter Bot!**\n\n"
             "Commands:\n"
             "• `/suggest` [book title] - Suggest a book for your group backlog.\n"
+            "• `/backlog` - View full group backlog list and details.\n"
             "• `/bookvoter` - Control panel (Start/Finish vote, Delete books, Stats).\n"
+            "• `/chat_stats` - View local group stats.\n"
             "• `/language` - Change bot language.\n"
             "• Click on book rating links sent in groups to rate backlog books privately!"
         ),
@@ -30,7 +32,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "📚 **Добро пожаловать в BookVoter Bot!**\n\n"
             "Команды:\n"
             "• `/suggest` [название книги] - Предложить книгу в бэклог группы.\n"
+            "• `/backlog` - Просмотреть полный список бэклога группы.\n"
             "• `/bookvoter` - Панель управления (Голосование, Завершение чтения, Удаление книг, Статистика).\n"
+            "• `/chat_stats` - Статистика и аналитика этой группы.\n"
             "• `/language` - Сменить язык бота.\n"
             "• Нажимайте на ссылки оценки книг в группе, чтобы оценивать их в личных сообщениях!"
         )
@@ -111,6 +115,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Saved score: {score}/10",
         "ru": "Сохранена оценка: {score}/10"
     },
+    "backlog_list_header": {
+        "en": "📚 **Group Backlog List**\n\n",
+        "ru": "📚 **Список бэклога группы**\n\n"
+    },
+    "backlog_empty": {
+        "en": "📜 Backlog is currently empty. Add books using `/suggest`!",
+        "ru": "📜 Бэклог пока пуст. Добавьте книги с помощью `/suggest`!"
+    },
+    "rotation_note": {
+        "en": "\n\n_(Note: Books in genre '{genre}' excluded due to genre rotation rule)_",
+        "ru": "\n\n_(Примечание: книги жанра '{genre}' были исключены из топ-выбора из-за правила ротации жанров)_"
+    },
     "only_admins_allowed": {
         "en": "⚠️ Only group administrators can perform this action.",
         "ru": "⚠️ Только администраторы группы могут выполнять это действие."
@@ -120,16 +136,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "⚙️ **Панель управления BookVoter**"
     },
     "select_genre_for_vote": {
-        "en": "🏷️ **Filter Backlog by Genre for Voting:**\nSelect a genre or view all books sorted by average club rating:",
-        "ru": "🏷️ **Фильтр бэклога по жанрам для голосования:**\nВыберите жанр или просмотрите все книги, отсортированные по среднему рейтингу:"
+        "en": "🏷️ **Filter Backlog by Genre for Voting:**\nSelect a genre or view all books sorted by desire rating:",
+        "ru": "🏷️ **Фильтр бэклога по жанрам для голосования:**\nВыберите жанр или просмотрите все книги, отсортированные по рейтингу желания читать:"
     },
     "all_genres_btn": {
         "en": "🌐 All Genres",
         "ru": "🌐 Все жанры"
-    },
-    "books_in_genre_title": {
-        "en": "📚 **Top Books for Voting ({genre}):**\nSorted by average club rating:",
-        "ru": "📚 **Топ книг для голосования ({genre}):**\nОтсортировано по среднему рейтингу клуба:"
     },
     "btn_start_vote": {
         "en": "🎲 Start Next Book Vote",
@@ -147,6 +159,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "🗑️ Delete Book from Backlog",
         "ru": "🗑️ Удалить книгу из бэклога"
     },
+    "btn_audit_backlog": {
+        "en": "🔍 Audit Backlog Activity",
+        "ru": "🔍 Проверка активности бэклога"
+    },
     "btn_group_stats": {
         "en": "📊 Group Stats",
         "ru": "📊 Статистика группы"
@@ -154,6 +170,38 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "btn_back_to_menu": {
         "en": "⬅️ Back to Menu",
         "ru": "⬅️ Назад в меню"
+    },
+    "audit_title": {
+        "en": "🔍 **Backlog Activity Audit Report:**\n\n",
+        "ru": "🔍 **Отчет проверки активности бэклога:**\n\n"
+    },
+    "audit_clean": {
+        "en": "✅ **Audit clean!** All backlog books were suggested by active, participating members.",
+        "ru": "✅ **Проверка чистая!** Все книги в бэклоге предложены активными участниками группы."
+    },
+    "reason_departed": {
+        "en": "Suggested by departed member",
+        "ru": "Предложено вышедшим участником"
+    },
+    "reason_inactive": {
+        "en": "Suggested by inactive voter",
+        "ru": "Предложено неактивным участником"
+    },
+    "filter_all_time": {
+        "en": "All Time",
+        "ru": "За все время"
+    },
+    "filter_30_days": {
+        "en": "Last 30 Days",
+        "ru": "За 30 дней"
+    },
+    "chat_stats_title": {
+        "en": "📊 **Local Group Statistics ({filter_label})**\n\n",
+        "ru": "📊 **Локальная статистика группы ({filter_label})**\n\n"
+    },
+    "superadmin_stats_title": {
+        "en": "🌐 **Global Superadmin Dashboard ({filter_label})**\n\n",
+        "ru": "🌐 **Глобальная панель супер-админа ({filter_label})**\n\n"
     },
     "select_book_to_delete": {
         "en": "🗑️ **Select a book to delete from backlog or active list:**",
@@ -217,30 +265,38 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     "group_stats_text": {
         "en": (
-            "📊 **Group Statistics**\n\n"
+            "📊 **Group Statistics ({filter_label})**\n\n"
             "• Backlog Books: **{backlog_count}**\n"
             "• Completed Books: **{done_count}**\n"
-            "• Active Raters: **{active_raters}**"
+            "• Avg Desire Rating: **{avg_club_rating}/10**\n\n"
+            "🏆 **Top Contributors:**\n{contributors_str}\n\n"
+            "🗳️ **Top Voters:**\n{voters_str}"
         ),
         "ru": (
-            "📊 **Статистика группы**\n\n"
+            "📊 **Статистика группы ({filter_label})**\n\n"
             "• Книг в бэклоге: **{backlog_count}**\n"
             "• Прочитано книг: **{done_count}**\n"
-            "• Активных читателей: **{active_raters}**"
+            "• Средний рейтинг желания: **{avg_club_rating}/10**\n\n"
+            "🏆 **Топ авторов предложений:**\n{contributors_str}\n\n"
+            "🗳️ **Самые активные голосующие:**\n{voters_str}"
         )
     },
     "sys_stats_text": {
         "en": (
-            "🌐 **Global System Metrics**\n\n"
+            "🌐 **Global Superadmin Dashboard ({filter_label})**\n\n"
             "• Total Active Groups: **{total_active_chats}**\n"
-            "• Total Unique Internal Users: **{total_unique_users}**\n"
-            "• Total Downloaded Books: **{total_downloaded_books}**"
+            "• Total Unique Voters: **{total_voters}**\n"
+            "• Total Suggested Books: **{total_books_suggested}**\n\n"
+            "🔥 **Top Books by Wish Score:**\n{top_books_str}\n\n"
+            "🏷️ **Top Genres:**\n{top_genres_str}"
         ),
         "ru": (
-            "🌐 **Глобальные метрики системы**\n\n"
+            "🌐 **Глобальная панель супер-админа ({filter_label})**\n\n"
             "• Всего активных групп: **{total_active_chats}**\n"
-            "• Уникальных пользователей: **{total_unique_users}**\n"
-            "• Скачано книг: **{total_downloaded_books}**"
+            "• Уникальных проголосовавших: **{total_voters}**\n"
+            "• Всего предложено книг: **{total_books_suggested}**\n\n"
+            "🔥 **Топ книг по рейтингу желания:**\n{top_books_str}\n\n"
+            "🏷️ **Самые популярные жанры:**\n{top_genres_str}"
         )
     }
 }

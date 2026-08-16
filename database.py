@@ -53,6 +53,7 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
                 user_id INTEGER NOT NULL,
                 book_id INTEGER NOT NULL,
                 score INTEGER NOT NULL CHECK (score >= 1 AND score <= 10),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, book_id),
                 FOREIGN KEY (user_id) REFERENCES users (internal_id) ON DELETE CASCADE,
                 FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
@@ -83,12 +84,17 @@ async def init_db(db_path: str = "bookvoter.db") -> None:
             );
         """)
 
-        # Migrations for existing DBs if language_code column doesn't exist
+        # Migrations for existing DBs
         for table in ["users", "chats"]:
             async with db.execute(f"PRAGMA table_info({table})") as cursor:
                 columns = [row[1] for row in await cursor.fetchall()]
                 if "language_code" not in columns:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN language_code TEXT;")
+
+        async with db.execute("PRAGMA table_info(backlog_ratings)") as cursor:
+            columns = [row[1] for row in await cursor.fetchall()]
+            if "created_at" not in columns:
+                await db.execute("ALTER TABLE backlog_ratings ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
         await db.commit()
 
@@ -100,10 +106,12 @@ async def get_or_create_user(db_path: str, tg_id: int, username: Optional[str] =
             row = await cursor.fetchone()
             if row:
                 internal_id, curr_username, curr_fullname = row
-                if curr_username != username or curr_fullname != full_name:
+                new_username = username if username is not None else curr_username
+                new_fullname = full_name if full_name is not None else curr_fullname
+                if curr_username != new_username or curr_fullname != new_fullname:
                     await db.execute(
                         "UPDATE users SET username = ?, full_name = ? WHERE internal_id = ?",
-                        (username, full_name, internal_id)
+                        (new_username, new_fullname, internal_id)
                     )
                     await db.commit()
                 return internal_id
@@ -234,6 +242,26 @@ async def get_backlog_books_for_chat(db_path: str, chat_id: int) -> List[Dict[st
             return [dict(r) for r in rows]
 
 
+async def get_backlog_books_full_info(db_path: str, chat_id: int) -> List[Dict[str, Any]]:
+    """Fetch full backlog info for a chat including suggestor user info and average wish score."""
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT b.id, b.title, b.author, b.genre, b.status, b.created_at,
+                   u.tg_id as suggestor_tg_id, u.full_name as suggestor_name, u.username as suggestor_username,
+                   COALESCE(AVG(r.score), 0) as wish_score,
+                   COUNT(r.score) as wish_votes_count
+            FROM books b
+            LEFT JOIN users u ON b.suggested_by = u.internal_id
+            LEFT JOIN backlog_ratings r ON b.id = r.book_id
+            WHERE b.chat_id = ? AND b.status = 'backlog'
+            GROUP BY b.id
+            ORDER BY wish_score DESC, b.id ASC
+        """, (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_available_genres_in_backlog(db_path: str, chat_id: int) -> List[str]:
     """Get list of distinct non-empty genres present in a chat's backlog."""
     async with aiosqlite.connect(db_path) as db:
@@ -297,9 +325,9 @@ async def save_backlog_rating(db_path: str, tg_id: int, book_id: int, score: int
     internal_id = await get_or_create_user(db_path, tg_id)
     async with aiosqlite.connect(db_path) as db:
         await db.execute("""
-            INSERT INTO backlog_ratings (user_id, book_id, score)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id, book_id) DO UPDATE SET score = excluded.score
+            INSERT INTO backlog_ratings (user_id, book_id, score, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, book_id) DO UPDATE SET score = excluded.score, created_at = CURRENT_TIMESTAMP
         """, (internal_id, book_id, score))
         await db.commit()
 
@@ -316,17 +344,17 @@ async def get_last_read_genre(db_path: str, chat_id: int) -> Optional[str]:
             return row[0] if row else None
 
 
-async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
+async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> Dict[str, Any]:
     """
     Select top N backlog books based on average rating.
     Excludes the genre of the previously read book if possible.
+    Returns dict containing 'books' list and 'excluded_genre' if applicable.
     """
     last_genre = await get_last_read_genre(db_path, chat_id)
 
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
 
-        # Base query calculating average score
         base_query = """
             SELECT b.id, b.chat_id, b.title, b.author, b.genre,
                    COALESCE(AVG(r.score), 0) as avg_score,
@@ -336,18 +364,18 @@ async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int 
             WHERE b.chat_id = ? AND b.status = 'backlog'
         """
 
-        # If we have a last_genre, try fetching excluding that genre first
         if last_genre:
             query = base_query + " AND (b.genre IS NULL OR LOWER(b.genre) != LOWER(?)) GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
             async with db.execute(query, (chat_id, last_genre, limit)) as cursor:
                 results = [dict(r) for r in await cursor.fetchall()]
                 if len(results) >= limit:
-                    return results
+                    return {"books": results, "excluded_genre": last_genre}
 
         # If not enough books excluding last_genre, fetch all backlog books
         query = base_query + " GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
         async with db.execute(query, (chat_id, limit)) as cursor:
-            return [dict(r) for r in await cursor.fetchall()]
+            results = [dict(r) for r in await cursor.fetchall()]
+            return {"books": results, "excluded_genre": None}
 
 
 async def update_books_status(db_path: str, book_ids: List[int], status: str) -> None:
@@ -449,25 +477,163 @@ async def get_hall_of_fame(db_path: str, chat_id: int) -> List[Dict[str, Any]]:
             return [dict(r) for r in rows]
 
 
-async def get_group_stats(db_path: str, chat_id: int) -> Dict[str, Any]:
-    """Get stats for a specific chat."""
+async def audit_backlog_activity(db_path: str, chat_id: int, active_tg_ids: List[int]) -> List[Dict[str, Any]]:
+    """
+    Audit books in backlog for a chat:
+    1. Suggested by a user who is not in active_tg_ids (departed member).
+    2. Suggested by a user who has not rated any books in the backlog (inactive member).
+    """
     async with aiosqlite.connect(db_path) as db:
-        async with db.execute("SELECT COUNT(*) FROM books WHERE chat_id = ? AND status = 'backlog'", (chat_id,)) as cursor:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT b.id, b.title, b.author, b.genre, b.created_at,
+                   u.tg_id as suggestor_tg_id, u.full_name as suggestor_name, u.username as suggestor_username,
+                   u.internal_id as suggestor_internal_id
+            FROM books b
+            LEFT JOIN users u ON b.suggested_by = u.internal_id
+            WHERE b.chat_id = ? AND b.status = 'backlog'
+            ORDER BY b.id DESC
+        """, (chat_id,)) as cursor:
+            books = [dict(r) for r in await cursor.fetchall()]
+
+        audit_results = []
+        for b in books:
+            s_tg = b["suggestor_tg_id"]
+            reasons = []
+
+            if s_tg and s_tg not in active_tg_ids:
+                reasons.append("departed")
+
+            # Check voter activity (ratings count by suggestor)
+            s_internal = b["suggestor_internal_id"]
+            if s_internal:
+                async with db.execute("""
+                    SELECT COUNT(*) FROM backlog_ratings WHERE user_id = ?
+                """, (s_internal,)) as r_cursor:
+                    vote_count = (await r_cursor.fetchone())[0]
+                    if vote_count == 0:
+                        reasons.append("inactive")
+
+            if reasons:
+                b["reasons"] = reasons
+                audit_results.append(b)
+
+        return audit_results
+
+
+async def get_chat_stats_detailed(db_path: str, chat_id: int, days: Optional[int] = None) -> Dict[str, Any]:
+    """Get detailed chat metrics with optional time filter (e.g. days=30)."""
+    async with aiosqlite.connect(db_path) as db:
+        time_filter_books = ""
+        time_filter_ratings = ""
+        params_books = [chat_id]
+        params_ratings = [chat_id]
+
+        if days:
+            time_filter_books = " AND b.created_at >= datetime('now', ?)"
+            time_filter_ratings = " AND r.created_at >= datetime('now', ?)"
+            params_books.append(f"-{days} days")
+            params_ratings.append(f"-{days} days")
+
+        # Backlog count
+        async with db.execute(f"SELECT COUNT(*) FROM books b WHERE b.chat_id = ? AND b.status = 'backlog'{time_filter_books}", params_books) as cursor:
             backlog_count = (await cursor.fetchone())[0]
 
-        async with db.execute("SELECT COUNT(*) FROM books WHERE chat_id = ? AND status = 'done'", (chat_id,)) as cursor:
+        # Completed books
+        async with db.execute(f"SELECT COUNT(*) FROM books b WHERE b.chat_id = ? AND b.status = 'done'{time_filter_books}", params_books) as cursor:
             done_count = (await cursor.fetchone())[0]
 
-        async with db.execute("""
-            SELECT COUNT(DISTINCT user_id) FROM backlog_ratings
-            WHERE book_id IN (SELECT id FROM books WHERE chat_id = ?)
-        """, (chat_id,)) as cursor:
-            active_raters = (await cursor.fetchone())[0]
+        # Average wish rating
+        async with db.execute(f"""
+            SELECT COALESCE(AVG(r.score), 0) FROM backlog_ratings r
+            JOIN books b ON r.book_id = b.id
+            WHERE b.chat_id = ?{time_filter_ratings}
+        """, params_ratings) as cursor:
+            avg_club_rating = (await cursor.fetchone())[0]
+
+        # Top Contributors (most suggested books)
+        async with db.execute(f"""
+            SELECT u.full_name, u.username, COUNT(b.id) as cnt
+            FROM books b
+            JOIN users u ON b.suggested_by = u.internal_id
+            WHERE b.chat_id = ?{time_filter_books}
+            GROUP BY u.internal_id
+            ORDER BY cnt DESC LIMIT 3
+        """, params_books) as cursor:
+            top_contributors = [{"name": r[0] or r[1] or "User", "count": r[2]} for r in await cursor.fetchall()]
+
+        # Top Voters (most active raters)
+        async with db.execute(f"""
+            SELECT u.full_name, u.username, COUNT(r.book_id) as cnt
+            FROM backlog_ratings r
+            JOIN users u ON r.user_id = u.internal_id
+            JOIN books b ON r.book_id = b.id
+            WHERE b.chat_id = ?{time_filter_ratings}
+            GROUP BY u.internal_id
+            ORDER BY cnt DESC LIMIT 3
+        """, params_ratings) as cursor:
+            top_voters = [{"name": r[0] or r[1] or "User", "count": r[2]} for r in await cursor.fetchall()]
 
         return {
             "backlog_count": backlog_count,
             "done_count": done_count,
-            "active_raters": active_raters
+            "avg_club_rating": round(avg_club_rating, 2),
+            "top_contributors": top_contributors,
+            "top_voters": top_voters
+        }
+
+
+async def get_superadmin_stats_detailed(db_path: str, days: Optional[int] = None) -> Dict[str, Any]:
+    """Get global aggregated superadmin metrics with optional time filter."""
+    async with aiosqlite.connect(db_path) as db:
+        time_filter_books = ""
+        time_filter_ratings = ""
+        params_books = []
+        params_ratings = []
+
+        if days:
+            time_filter_books = " WHERE b.created_at >= datetime('now', ?)"
+            time_filter_ratings = " WHERE r.created_at >= datetime('now', ?)"
+            params_books.append(f"-{days} days")
+            params_ratings.append(f"-{days} days")
+
+        async with db.execute("SELECT COUNT(*) FROM chats WHERE status = 'active'", ()) as cursor:
+            total_active_chats = (await cursor.fetchone())[0]
+
+        async with db.execute(f"SELECT COUNT(DISTINCT r.user_id) FROM backlog_ratings r{time_filter_ratings}", params_ratings) as cursor:
+            total_voters = (await cursor.fetchone())[0]
+
+        async with db.execute(f"SELECT COUNT(*) FROM books b{time_filter_books}", params_books) as cursor:
+            total_books_suggested = (await cursor.fetchone())[0]
+
+        # Top books by wish rating
+        async with db.execute(f"""
+            SELECT b.title, b.author, COALESCE(AVG(r.score), 0) as avg_s
+            FROM books b
+            JOIN backlog_ratings r ON b.id = r.book_id
+            {time_filter_ratings}
+            GROUP BY b.id
+            ORDER BY avg_s DESC LIMIT 3
+        """, params_ratings) as cursor:
+            top_books = [{"title": r[0], "author": r[1], "score": round(r[2], 2)} for r in await cursor.fetchall()]
+
+        # Top genres by wish rating
+        async with db.execute(f"""
+            SELECT b.genre, COALESCE(AVG(r.score), 0) as avg_s
+            FROM books b
+            JOIN backlog_ratings r ON b.id = r.book_id
+            WHERE b.genre IS NOT NULL AND TRIM(b.genre) != ''
+            GROUP BY LOWER(b.genre)
+            ORDER BY avg_s DESC LIMIT 3
+        """, ()) as cursor:
+            top_genres = [{"genre": r[0], "score": round(r[1], 2)} for r in await cursor.fetchall()]
+
+        return {
+            "total_active_chats": total_active_chats,
+            "total_voters": total_voters,
+            "total_books_suggested": total_books_suggested,
+            "top_books": top_books,
+            "top_genres": top_genres
         }
 
 
