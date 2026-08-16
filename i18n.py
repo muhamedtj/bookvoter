@@ -1,6 +1,14 @@
 from typing import Dict, Any
 
 STRINGS: Dict[str, Dict[str, str]] = {
+    "unknown_author": {
+        "en": "Unknown Author",
+        "ru": "Неизвестный автор"
+    },
+    "general_genre": {
+        "en": "General",
+        "ru": "Без жанра"
+    },
     "select_language_prompt": {
         "en": "🌐 **Please select your language / Пожалуйста, выберите язык:**",
         "ru": "🌐 **Пожалуйста, выберите язык / Please select your language:**"

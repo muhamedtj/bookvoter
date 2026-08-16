@@ -97,11 +97,37 @@ def get_language_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-# Google Books API fetcher
-async def fetch_google_books(query: str) -> List[Dict[str, str]]:
-    url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(query)}&maxResults=3"
+# Helper: Fetch English edition metadata for author/genre enrichment
+async def fetch_english_enrichment(session: aiohttp.ClientSession, title: str) -> Dict[str, Any]:
+    try:
+        url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(title)}&langRestrict=en&maxResults=1"
+        if GOOGLE_BOOKS_API_KEY:
+            url += f"&key={GOOGLE_BOOKS_API_KEY}"
+        async with session.get(url, timeout=5) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                items = data.get("items", [])
+                if items:
+                    info = items[0].get("volumeInfo", {})
+                    authors = info.get("authors", [])
+                    categories = info.get("categories", [])
+                    return {
+                        "author": ", ".join(authors) if authors else None,
+                        "genre": categories[0] if categories else None
+                    }
+    except Exception as e:
+        logger.debug(f"Enrichment fetch failed for '{title}': {e}")
+    return {"author": None, "genre": None}
+
+
+# Google Books API fetcher with Top-5 results & Enrichment
+async def fetch_google_books(query: str, lang: str = "en") -> List[Dict[str, str]]:
+    url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(query)}&maxResults=5"
     if GOOGLE_BOOKS_API_KEY:
         url += f"&key={GOOGLE_BOOKS_API_KEY}"
+
+    unknown_author_str = t("unknown_author", lang)
+    general_genre_str = t("general_genre", lang)
 
     async with aiohttp.ClientSession() as session:
         try:
@@ -110,37 +136,51 @@ async def fetch_google_books(query: str) -> List[Dict[str, str]]:
                     logger.warning(f"Google Books API returned status {resp.status}")
                     return [{
                         "title": query.title(),
-                        "author": "Unknown Author",
-                        "genre": "General"
+                        "author": unknown_author_str,
+                        "genre": general_genre_str
                     }]
                 data = await resp.json()
                 items = data.get("items", [])
                 results = []
-                for item in items[:3]:
+                for item in items[:5]:
                     info = item.get("volumeInfo", {})
                     title = info.get("title", "Unknown Title")
-                    authors = info.get("authors", ["Unknown Author"])
-                    author_str = ", ".join(authors)
+                    authors = info.get("authors", [])
                     categories = info.get("categories", [])
-                    genre_str = categories[0] if categories else "General"
+
+                    author_val = ", ".join(authors) if authors else None
+                    genre_val = categories[0] if categories else None
+
+                    # If author or genre is missing/General, attempt English enrichment
+                    if not author_val or not genre_val or genre_val.lower() == "general":
+                        enriched = await fetch_english_enrichment(session, title)
+                        if not author_val and enriched.get("author"):
+                            author_val = enriched["author"]
+                        if (not genre_val or genre_val.lower() == "general") and enriched.get("genre"):
+                            genre_val = enriched["genre"]
+
+                    author_str = author_val if author_val else unknown_author_str
+                    genre_str = genre_val if (genre_val and genre_val.lower() != "general") else general_genre_str
+
                     results.append({
                         "title": title,
                         "author": author_str,
                         "genre": genre_str
                     })
+
                 if not results:
                     results.append({
                         "title": query.title(),
-                        "author": "Unknown Author",
-                        "genre": "General"
+                        "author": unknown_author_str,
+                        "genre": general_genre_str
                     })
                 return results
         except Exception as e:
             logger.error(f"Error fetching Google Books: {e}")
             return [{
                 "title": query.title(),
-                "author": "Unknown Author",
-                "genre": "General"
+                "author": unknown_author_str,
+                "genre": general_genre_str
             }]
 
 
@@ -216,7 +256,7 @@ async def handle_suggest(message: Message, command: CommandObject):
         return
 
     status_msg = await message.answer(t("searching_google_books", lang))
-    books = await fetch_google_books(query)
+    books = await fetch_google_books(query, lang)
 
     if not books:
         await status_msg.edit_text(t("no_books_found", lang))
@@ -339,6 +379,9 @@ async def handle_rate_callback(callback: CallbackQuery):
 
 @router.poll()
 async def handle_poll_update(poll: Poll):
+    if poll.is_closed:
+        return
+
     active_poll = await database.get_active_poll_by_poll_id(DATABASE_PATH, poll.id)
     if not active_poll:
         return
