@@ -43,6 +43,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "⚙️ Open Control Panel",
         "ru": "⚙️ Открыть панель управления"
     },
+    "btn_report_error": {
+        "en": "🐛 Report an Error",
+        "ru": "🐛 Сообщить об ошибке"
+    },
+    "error_reported_thanks": {
+        "en": "Thank you! Error report sent to developer.",
+        "ru": "Спасибо! Отчет об ошибке отправлен разработчику."
+    },
+    "report_error_prompt": {
+        "en": "Click below if you encountered an issue to send a diagnostic report to the developer:",
+        "ru": "Нажмите ниже, если у вас возникли неполадки, чтобы отправить диагностический отчет разработчику:"
+    },
     "suggest_usage": {
         "en": "Please specify a book title, e.g.: `/suggest Dune`",
         "ru": "Пожалуйста, укажите название книги, например: `/suggest Дюна`"

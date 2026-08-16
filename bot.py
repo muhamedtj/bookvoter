@@ -3,17 +3,17 @@ import sys
 import json
 import logging
 import asyncio
+import traceback
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from urllib.parse import quote
 
 from dotenv import load_dotenv
-import aiohttp
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    FSInputFile, Poll, PollAnswer
+    FSInputFile, Poll, PollAnswer, ErrorEvent
 )
 from aiogram.enums import ChatType
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -47,6 +47,59 @@ dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 router = Router()
 dp.include_router(router)
+
+
+# --- Error Notification Helper ---
+
+async def notify_superadmin_error(error_title: str, error_traceback: str, user_id: Optional[int] = None, chat_id: Optional[int] = None, context_info: str = ""):
+    """Send formatted error diagnostic report to superadmin in PM with fallback logging."""
+    report = (
+        f"🚨 **Critical Error Report**\n\n"
+        f"📌 **Title:** {error_title}\n"
+        f"👤 **User ID:** {user_id or 'N/A'}\n"
+        f"💬 **Chat ID:** {chat_id or 'N/A'}\n"
+        f"⏰ **Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"📝 **Context:** {context_info or 'N/A'}\n\n"
+        f"📋 **Traceback:**\n```\n{error_traceback[-1500:]}\n```"
+    )
+
+    if not SUPER_ADMIN_IDS:
+        logger.error(f"[Superadmin Notification Skipped] {report}")
+        return
+
+    for admin_id in SUPER_ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, report, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Failed to send error report to superadmin {admin_id}: {e}\nFull Report:\n{report}")
+
+
+# Global Aiogram Error Middleware / Handler
+@dp.errors()
+async def global_error_handler(event: ErrorEvent):
+    logger.error(f"Unhandled exception in handler: {event.exception}", exc_info=event.exception)
+    tb_str = "".join(traceback.format_exception(type(event.exception), event.exception, event.exception.__traceback__))
+
+    user_id = None
+    chat_id = None
+    context_str = "Unhandled Exception"
+
+    if event.update.message:
+        user_id = event.update.message.from_user.id if event.update.message.from_user else None
+        chat_id = event.update.message.chat.id
+        context_str = f"Command/Text: {event.update.message.text}"
+    elif event.update.callback_query:
+        user_id = event.update.callback_query.from_user.id
+        chat_id = event.update.callback_query.message.chat.id if event.update.callback_query.message else None
+        context_str = f"Callback Data: {event.update.callback_query.data}"
+
+    await notify_superadmin_error(
+        error_title=str(type(event.exception).__name__),
+        error_traceback=tb_str,
+        user_id=user_id,
+        chat_id=chat_id,
+        context_info=context_str
+    )
 
 
 # Helper: Check if user is Admin in Chat or Superadmin
@@ -112,16 +165,16 @@ async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List
 
         if proc.returncode == 0:
             output_str = stdout.decode("utf-8").strip()
-            # Extract JSON output
-            json_lines = [line for line in output_str.splitlines() if line.startswith("[")]
-            if json_lines:
-                data = json.loads(json_lines[-1])
-                return data
-            elif output_str.startswith("["):
-                return json.loads(output_str)
+            # Extract JSON array output securely
+            for line in reversed(output_str.splitlines()):
+                line_str = line.strip()
+                if line_str.startswith("["):
+                    try:
+                        return json.loads(line_str)
+                    except json.JSONDecodeError:
+                        pass
 
         logger.warning(f"Userbot search returned non-zero code or failed: {stderr.decode()}")
-        # Default fallback
         return [{
             "title": query.title(),
             "author": "Library Bot",
@@ -164,10 +217,31 @@ async def handle_start(message: Message, command: CommandObject):
 
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
     ])
 
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.callback_query(F.data == "report_error")
+async def handle_report_error_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+    u_name = callback.from_user.full_name or callback.from_user.username or "User"
+
+    context_str = f"User {u_name} ({user_id}) manually submitted an error report from chat {chat_id}."
+
+    await notify_superadmin_error(
+        error_title="User Error Report 🐛",
+        error_traceback="No traceback (User reported issue via button)",
+        user_id=user_id,
+        chat_id=chat_id,
+        context_info=context_str
+    )
+
+    await callback.answer(t("error_reported_thanks", lang), show_alert=True)
 
 
 @router.message(Command("backlog"))
@@ -230,7 +304,8 @@ async def handle_set_language_callback(callback: CallbackQuery):
     await callback.answer(t("language_selected", lang_code))
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang_code), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang_code), callback_data="report_error")]
     ])
     await callback.message.edit_text(
         t("language_selected", lang_code) + "\n\n" + t("welcome_msg", lang_code),
@@ -253,7 +328,10 @@ async def handle_suggest(message: Message, command: CommandObject):
     books = await fetch_books_via_userbot(query, lang)
 
     if books is None:
-        await status_msg.edit_text(t("google_books_api_error", lang))
+        err_markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
+        ])
+        await status_msg.edit_text(t("google_books_api_error", lang), reply_markup=err_markup)
         return
 
     if not books:
@@ -475,7 +553,8 @@ def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")],
         [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
         [InlineKeyboardButton(text=t("btn_audit_backlog", lang), callback_data="admin_audit_backlog")],
-        [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")]
+        [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
     ])
 
 
