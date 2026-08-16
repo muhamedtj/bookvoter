@@ -77,10 +77,13 @@ async def search_options_via_userbot(query_title: str) -> None:
             raw_blocks = re.split(r"\n\s*\n", raw_text)
             for block in raw_blocks:
                 lines = [line.strip() for line in block.splitlines() if line.strip()]
-                # Skip header/footer lines
+                # Skip header/footer lines or system prompts
                 filtered_lines = [
                     l for l in lines
-                    if not any(w in l.lower() for w in ["/start", "добро пожаловать", "приветствую", "найдено:", "мы нашли именно то"])
+                    if not any(w in l.lower() for w in [
+                        "/start", "добро пожаловать", "приветствую", "найдено:",
+                        "мы нашли именно то", "книга по вашему запросу", "поиск...", "идет поиск"
+                    ])
                 ]
                 if not filtered_lines:
                     continue
@@ -89,7 +92,7 @@ async def search_options_via_userbot(query_title: str) -> None:
                 dl_cmd = ""
                 non_cmd_lines = []
                 for l in filtered_lines:
-                    cmd_m = re.search(r"/(?:download|get|dl|d)_[a_zA_Z0_9_]+|/download\d+", l)
+                    cmd_m = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", l)
                     if cmd_m:
                         dl_cmd = cmd_m.group(0)
                     else:
@@ -97,21 +100,31 @@ async def search_options_via_userbot(query_title: str) -> None:
 
                 if non_cmd_lines:
                     raw_title = non_cmd_lines[0]
-                    # Strip language tags like '- ru' or '[ru]'
-                    clean_title = re.sub(r"\s*[-–—]\s*(?:ru|en|litres).*", "", raw_title, flags=re.IGNORECASE).strip()
+                    # Clean title by removing language suffixes like '- ru', '– ru', '[ru]', etc.
+                    clean_title = re.sub(r"\s*[-–—]?\s*(?:ru|en|litres|pdf|epub)\b.*$", "", raw_title, flags=re.IGNORECASE).strip()
+                    if not clean_title:
+                        clean_title = raw_title
 
                     author = ""
-                    if len(non_cmd_lines) >= 3:
+                    if len(non_cmd_lines) >= 2:
                         author = non_cmd_lines[-1]
-                    elif len(non_cmd_lines) == 2:
-                        author = non_cmd_lines[1]
+                    elif " — " in clean_title or " - " in clean_title:
+                        parts = re.split(r"\s+[—\-]\s+", clean_title, 1)
+                        if len(parts) == 2:
+                            clean_title, author = parts[0].strip(), parts[1].strip()
+
+                    # Filter invalid author strings
+                    if author and (author.startswith("(") or "скачать" in author.lower() or "найдено" in author.lower()):
+                        author = ""
+
+                    final_author = author if author else "Unknown Author"
 
                     blocks.append({
                         "title": clean_title,
-                        "author": author if author and not author.startswith("(") else query_title.title(),
+                        "author": final_author,
                         "genre": "",
                         "download_cmd": dl_cmd,
-                        "raw_label": f"{clean_title} — {author}" if author else clean_title
+                        "raw_label": f"{clean_title} — {final_author}" if final_author != "Unknown Author" else clean_title
                     })
 
             return blocks
@@ -137,10 +150,11 @@ async def search_options_via_userbot(query_title: str) -> None:
                 for row in message.reply_markup.inline_keyboard[:5]:
                     for btn in row:
                         btn_text = btn.text.strip()
-                        parts = btn_text.split(" - ", 1) if " - " in btn_text else [btn_text, ""]
+                        parts = btn_text.split(" - ", 1) if " - " in btn_text else (btn_text.split(" — ", 1) if " — " in btn_text else [btn_text, ""])
+                        author_val = parts[1].strip() if len(parts) > 1 and parts[1] else "Unknown Author"
                         results.append({
                             "title": parts[0].strip(),
-                            "author": parts[1].strip() if len(parts) > 1 and parts[1] else query_title.title(),
+                            "author": author_val,
                             "genre": "",
                             "download_cmd": btn.callback_data or "",
                             "raw_label": btn_text
@@ -276,10 +290,10 @@ async def search_and_download(title: str) -> None:
                 except Exception as cb_err:
                     logging.warning(f"Failed to trigger inline button: {cb_err}")
 
-            # Case B: Message contains text list with download command (e.g., /download_123 or /get_456 or /d_789)
+            # Case B: Message contains text list with download command (e.g., /download682541 or /download_123 or /get_456 or /d_789)
             if msg_text and not message.document:
-                # Find download command pattern like /download_... or /dl_... or /get_... or /d_...
-                cmd_match = re.search(r"/(?:download|get|dl|d)_[a_zA_Z0_9_]+", msg_text)
+                # Find download command pattern like /download682541 or /download_123 or /dl_123 or /get_123 or /d_123
+                cmd_match = re.search(r"/(?:download|get|dl|d)_?[a_zA_Z0_9_]+", msg_text)
                 if cmd_match:
                     dl_cmd = cmd_match.group(0)
                     try:
