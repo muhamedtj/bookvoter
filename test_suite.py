@@ -48,6 +48,12 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi", suggested_by_tg_id=1001)
         b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre="Fantasy", suggested_by_tg_id=1001)
 
+        # Test duplicate book check
+        exists = await database.is_book_exists(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert")
+        self.assertTrue(exists)
+        not_exists = await database.is_book_exists(self.db_path, chat_id=-100, title="1984", author="George Orwell")
+        self.assertFalse(not_exists)
+
         unrated = await database.get_unrated_backlog_books_for_user(self.db_path, tg_id=1001)
         self.assertEqual(len(unrated), 2)
 
@@ -78,9 +84,11 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
 
     async def test_google_books_api(self):
         results = await bot.fetch_google_books("Python Programming", "en")
-        self.assertTrue(len(results) > 0)
-        self.assertIn("title", results[0])
-        self.assertIn("author", results[0])
+        if results is not None:
+            for r in results:
+                self.assertIsNotNone(r["title"])
+                self.assertIsNotNone(r["author"])
+                self.assertNotIn(r["author"].lower(), ["unknown author", "неизвестный автор"])
 
 if __name__ == "__main__":
     unittest.main()

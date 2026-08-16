@@ -120,13 +120,12 @@ async def fetch_english_enrichment(session: aiohttp.ClientSession, title: str) -
     return {"author": None, "genre": None}
 
 
-# Google Books API fetcher with Top-5 results & Enrichment
-async def fetch_google_books(query: str, lang: str = "en") -> List[Dict[str, str]]:
+# Google Books API fetcher with strict validation
+async def fetch_google_books(query: str, lang: str = "en") -> Optional[List[Dict[str, str]]]:
     url = f"https://www.googleapis.com/books/v1/volumes?q={aiohttp.helpers.quote(query)}&maxResults=5"
     if GOOGLE_BOOKS_API_KEY:
         url += f"&key={GOOGLE_BOOKS_API_KEY}"
 
-    unknown_author_str = t("unknown_author", lang)
     general_genre_str = t("general_genre", lang)
 
     async with aiohttp.ClientSession() as session:
@@ -134,22 +133,23 @@ async def fetch_google_books(query: str, lang: str = "en") -> List[Dict[str, str
             async with session.get(url, timeout=10) as resp:
                 if resp.status != 200:
                     logger.warning(f"Google Books API returned status {resp.status}")
-                    return [{
-                        "title": query.title(),
-                        "author": unknown_author_str,
-                        "genre": general_genre_str
-                    }]
+                    return None  # Signal API/network failure
+
                 data = await resp.json()
                 items = data.get("items", [])
                 results = []
+
                 for item in items[:5]:
                     info = item.get("volumeInfo", {})
-                    title = info.get("title", "Unknown Title")
+                    title = info.get("title")
+                    if not title or not title.strip():
+                        continue
+
                     authors = info.get("authors", [])
                     categories = info.get("categories", [])
 
-                    author_val = ", ".join(authors) if authors else None
-                    genre_val = categories[0] if categories else None
+                    author_val = ", ".join(authors).strip() if authors else None
+                    genre_val = categories[0].strip() if categories else None
 
                     # If author or genre is missing/General, attempt English enrichment
                     if not author_val or not genre_val or genre_val.lower() == "general":
@@ -159,29 +159,22 @@ async def fetch_google_books(query: str, lang: str = "en") -> List[Dict[str, str
                         if (not genre_val or genre_val.lower() == "general") and enriched.get("genre"):
                             genre_val = enriched["genre"]
 
-                    author_str = author_val if author_val else unknown_author_str
+                    # Discard result if author is missing or invalid stub
+                    if not author_val or author_val.lower() in ["unknown author", "неизвестный автор"]:
+                        continue
+
                     genre_str = genre_val if (genre_val and genre_val.lower() != "general") else general_genre_str
 
                     results.append({
-                        "title": title,
-                        "author": author_str,
+                        "title": title.strip(),
+                        "author": author_val,
                         "genre": genre_str
                     })
 
-                if not results:
-                    results.append({
-                        "title": query.title(),
-                        "author": unknown_author_str,
-                        "genre": general_genre_str
-                    })
                 return results
         except Exception as e:
             logger.error(f"Error fetching Google Books: {e}")
-            return [{
-                "title": query.title(),
-                "author": unknown_author_str,
-                "genre": general_genre_str
-            }]
+            return None
 
 
 # --- Handlers ---
@@ -210,7 +203,7 @@ async def handle_start(message: Message, command: CommandObject):
         await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    # Duplicate key sections in start welcome message as inline buttons
+    # Inline control buttons under welcome message
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
         [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")]
@@ -280,8 +273,12 @@ async def handle_suggest(message: Message, command: CommandObject):
     status_msg = await message.answer(t("searching_google_books", lang))
     books = await fetch_google_books(query, lang)
 
+    if books is None:
+        await status_msg.edit_text(t("google_books_api_error", lang))
+        return
+
     if not books:
-        await status_msg.edit_text(t("no_books_found", lang))
+        await status_msg.edit_text(t("no_valid_books_found", lang))
         return
 
     temp_key = f"sug_{message.chat.id}_{message.from_user.id}_{int(datetime.now().timestamp())}"
@@ -320,6 +317,18 @@ async def handle_suggestion_select(callback: CallbackQuery):
     selected_book = books_list[idx]
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
+
+    # Check for duplicate book in this group chat
+    already_exists = await database.is_book_exists(
+        DATABASE_PATH,
+        chat_id=chat_id,
+        title=selected_book["title"],
+        author=selected_book["author"]
+    )
+    if already_exists:
+        await callback.answer(t("book_already_exists", lang), show_alert=True)
+        await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
+        return
 
     book_id = await database.add_book(
         DATABASE_PATH,

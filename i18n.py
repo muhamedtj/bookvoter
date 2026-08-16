@@ -47,6 +47,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Searching Google Books...",
         "ru": "Поиск в Google Books..."
     },
+    "google_books_api_error": {
+        "en": "Could not connect to the book database. Please try again later.",
+        "ru": "Не удалось связаться с базой данных книг. Попробуйте позже."
+    },
+    "no_valid_books_found": {
+        "en": "Could not find a book matching your query. Please try refining the title.",
+        "ru": "Не удалось найти книгу по вашему запросу. Попробуйте уточнить название."
+    },
+    "book_already_exists": {
+        "en": "⚠️ This book is already in the club list!",
+        "ru": "⚠️ Эта книга уже есть в списке клуба!"
+    },
     "no_books_found": {
         "en": "No books found for your query. Please try a different title.",
         "ru": "По вашему запросу ничего не найдено. Попробуйте другое название."
@@ -92,8 +104,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "🎉 **Всё оценено!** Вы оценили все доступные книги из бэклога ваших групп."
     },
     "rate_prompt_group": {
-        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n🏷️ **Genre:** {genre}\n\nRate this book from **1** (lowest) to **10** (highest):",
-        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n🏷️ **Жанр:** {genre}\n\nОцените эту книгу от **1** (минимум) до **10** (максимум):"
+        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n🏷️ **Genre:** {genre}\n\nHow strongly do you want to read this book (from 1 to 10)?",
+        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n🏷️ **Жанр:** {genre}\n\nНасколько сильно вы хотите читать эту книгу (от 1 до 10)?"
     },
     "saved_score_cb": {
         "en": "Saved score: {score}/10",

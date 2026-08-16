@@ -176,6 +176,17 @@ async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optiona
         return lang if lang else "en"
 
 
+async def is_book_exists(db_path: str, chat_id: int, title: str, author: str) -> bool:
+    """Check if a book with matching title and author already exists in chat's records."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("""
+            SELECT id FROM books
+            WHERE chat_id = ? AND LOWER(TRIM(title)) = LOWER(TRIM(?)) AND LOWER(TRIM(author)) = LOWER(TRIM(?))
+        """, (chat_id, title, author)) as cursor:
+            row = await cursor.fetchone()
+            return row is not None
+
+
 async def add_book(
     db_path: str,
     chat_id: int,
