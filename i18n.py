@@ -107,6 +107,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "⚙️ **BookVoter Control Panel**",
         "ru": "⚙️ **Панель управления BookVoter**"
     },
+    "select_genre_for_vote": {
+        "en": "🏷️ **Filter Backlog by Genre for Voting:**\nSelect a genre or view all books sorted by average club rating:",
+        "ru": "🏷️ **Фильтр бэклога по жанрам для голосования:**\nВыберите жанр или просмотрите все книги, отсортированные по среднему рейтингу:"
+    },
+    "all_genres_btn": {
+        "en": "🌐 All Genres",
+        "ru": "🌐 Все жанры"
+    },
+    "books_in_genre_title": {
+        "en": "📚 **Top Books for Voting ({genre}):**\nSorted by average club rating:",
+        "ru": "📚 **Топ книг для голосования ({genre}):**\nОтсортировано по среднему рейтингу клуба:"
+    },
     "btn_start_vote": {
         "en": "🎲 Start Next Book Vote",
         "ru": "🎲 Начать голосование за книгу"

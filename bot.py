@@ -458,14 +458,100 @@ def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 
 @router.callback_query(F.data == "admin_start_vote")
-async def handle_admin_start_vote(callback: CallbackQuery):
-    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
-    if not await is_admin(callback.message.chat.id, callback.from_user.id):
+async def handle_admin_start_vote_menu(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    if not await is_admin(chat_id, callback.from_user.id):
         await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
 
+    active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
+    if active_poll:
+        await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
+        return
+
+    genres = await database.get_available_genres_in_backlog(DATABASE_PATH, chat_id)
+
+    keyboard = [
+        [InlineKeyboardButton(text=t("all_genres_btn", lang), callback_data="vote_genre:all")]
+    ]
+    for g in genres:
+        keyboard.append([InlineKeyboardButton(text=f"🏷️ {g[:30]}", callback_data=f"vote_genre:{g}")])
+
+    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")])
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+
     await callback.answer()
-    await start_vote_process(callback.message.chat.id, lang)
+    await callback.message.edit_text(t("select_genre_for_vote", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data.startswith("vote_genre:"))
+async def handle_vote_genre_selected(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+    if not await is_admin(chat_id, callback.from_user.id):
+        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
+        return
+
+    genre_param = callback.data.split(":", 1)[1]
+
+    # Fetch books sorted by average score
+    if genre_param.lower() == "all":
+        books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+    else:
+        all_genre_books = await database.get_backlog_books_by_genre(DATABASE_PATH, chat_id, genre_param)
+        books = all_genre_books[:3]
+
+    if not books:
+        await callback.answer(t("no_backlog_books_err", lang), show_alert=True)
+        return
+
+    await callback.answer()
+
+    # Launch poll with selected top books
+    await launch_poll_for_books(chat_id, books, lang)
+
+    # Update callback message
+    await callback.message.edit_text(
+        t("vote_started_msg", lang),
+        parse_mode="Markdown"
+    )
+
+
+async def launch_poll_for_books(chat_id: int, top_books: List[Dict[str, Any]], lang: str):
+    book_ids = [b["id"] for b in top_books]
+    await database.update_books_status(DATABASE_PATH, book_ids, "voting")
+
+    options = [f"{b['title']} — {b['author']}"[:100] for b in top_books]
+    options_mapping = {idx: b["id"] for idx, b in enumerate(top_books)}
+
+    poll_msg = await bot.send_poll(
+        chat_id=chat_id,
+        question=t("poll_question", lang),
+        options=options,
+        is_anonymous=False,
+        allows_multiple_answers=False
+    )
+
+    await database.save_active_poll(
+        DATABASE_PATH,
+        chat_id=chat_id,
+        poll_id=poll_msg.poll.id,
+        message_id=poll_msg.message_id,
+        options_json=json.dumps(options_mapping)
+    )
+
+    # Schedule 24h job
+    job_id = f"poll_end_{chat_id}_{poll_msg.message_id}"
+    run_time = datetime.now() + timedelta(hours=24)
+    scheduler.add_job(
+        finish_vote_process,
+        "date",
+        run_date=run_time,
+        args=[chat_id],
+        id=job_id,
+        replace_existing=True
+    )
 
 
 @router.callback_query(F.data == "admin_finish_vote_early")
@@ -562,59 +648,14 @@ async def handle_vote_cmd(message: Message):
     if not await is_admin(message.chat.id, message.from_user.id):
         await message.answer(t("only_admins_allowed", lang))
         return
-    await start_vote_process(message.chat.id, lang)
 
-
-async def start_vote_process(chat_id: int, lang: str):
-    active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
-    if active_poll:
-        await bot.send_message(chat_id, t("vote_in_progress_err", lang))
-        return
-
-    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
     if not top_books:
-        await bot.send_message(chat_id, t("no_backlog_books_err", lang))
+        await message.answer(t("no_backlog_books_err", lang))
         return
 
-    book_ids = [b["id"] for b in top_books]
-    await database.update_books_status(DATABASE_PATH, book_ids, "voting")
-
-    options = [f"{b['title']} — {b['author']}"[:100] for b in top_books]
-    options_mapping = {idx: b["id"] for idx, b in enumerate(top_books)}
-
-    poll_msg = await bot.send_poll(
-        chat_id=chat_id,
-        question=t("poll_question", lang),
-        options=options,
-        is_anonymous=False,
-        allows_multiple_answers=False
-    )
-
-    await database.save_active_poll(
-        DATABASE_PATH,
-        chat_id=chat_id,
-        poll_id=poll_msg.poll.id,
-        message_id=poll_msg.message_id,
-        options_json=json.dumps(options_mapping)
-    )
-
-    # Schedule 24h job
-    job_id = f"poll_end_{chat_id}_{poll_msg.message_id}"
-    run_time = datetime.now() + timedelta(hours=24)
-    scheduler.add_job(
-        finish_vote_process,
-        "date",
-        run_date=run_time,
-        args=[chat_id],
-        id=job_id,
-        replace_existing=True
-    )
-
-    await bot.send_message(
-        chat_id,
-        t("vote_started_msg", lang),
-        parse_mode="Markdown"
-    )
+    await launch_poll_for_books(message.chat.id, top_books, lang)
+    await message.answer(t("vote_started_msg", lang), parse_mode="Markdown")
 
 
 @router.message(Command("finish_vote"))

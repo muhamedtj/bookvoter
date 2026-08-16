@@ -223,6 +223,44 @@ async def get_backlog_books_for_chat(db_path: str, chat_id: int) -> List[Dict[st
             return [dict(r) for r in rows]
 
 
+async def get_available_genres_in_backlog(db_path: str, chat_id: int) -> List[str]:
+    """Get list of distinct non-empty genres present in a chat's backlog."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute("""
+            SELECT DISTINCT genre FROM books
+            WHERE chat_id = ? AND status = 'backlog' AND genre IS NOT NULL AND TRIM(genre) != ''
+            ORDER BY genre ASC
+        """, (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
+
+async def get_backlog_books_by_genre(db_path: str, chat_id: int, genre: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Fetch backlog books optionally filtered by genre, sorted by average rating in descending order.
+    """
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        base_query = """
+            SELECT b.id, b.chat_id, b.title, b.author, b.genre,
+                   COALESCE(AVG(r.score), 0) as avg_score,
+                   COUNT(r.score) as rating_count
+            FROM books b
+            LEFT JOIN backlog_ratings r ON b.id = r.book_id
+            WHERE b.chat_id = ? AND b.status = 'backlog'
+        """
+        params = [chat_id]
+        if genre and genre.lower() != "all":
+            base_query += " AND LOWER(b.genre) = LOWER(?)"
+            params.append(genre)
+
+        base_query += " GROUP BY b.id ORDER BY avg_score DESC, b.id ASC"
+
+        async with db.execute(base_query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
 async def get_unrated_backlog_books_for_user(db_path: str, tg_id: int) -> List[Dict[str, Any]]:
     """Fetch all backlog books across chats where user is active that user hasn't rated yet."""
     internal_id = await get_or_create_user(db_path, tg_id)
