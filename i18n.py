@@ -106,6 +106,53 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "book_field_author": {
         "en": "✍️ **Author:** {author}",
         "ru": "✍️ **Автор:** {author}"
+    "btn_how_it_works": {
+        "en": "ℹ️ How it works",
+        "ru": "ℹ️ Как работает бот"
+    },
+    "help_msg": {
+        "en": (
+            "ℹ️ **How BookVoter Works**\n\n"
+            "1. **Suggest a book**\n"
+            "   In the group chat, type:\n"
+            "   `/suggest Book Title`\n\n"
+            "2. **Select the matching edition**\n"
+            "   The bot will display search results. Tap the right book to add it to the club's backlog.\n\n"
+            "3. **Rate your interest**\n"
+            "   Open a private chat with the bot and rate books from 1 to 10.\n"
+            "   The higher your score, the more you want to read the book.\n"
+            "   Your interest ratings remain private to you.\n\n"
+            "4. **Vote for the next book**\n"
+            "   Books with the highest interest ratings enter the next vote.\n"
+            "   An administrator starts the vote, and members choose the next book for the club.\n"
+            "   Voting lasts up to 24 hours and may end earlier if one book receives more than 50% of the votes.\n\n"
+            "5. **Read and rate**\n"
+            "   After the vote, the bot delivers the book file to the group.\n"
+            "   When the club finishes reading, rate the book from 1 to 10 — or mark that you didn't read it.\n\n"
+            "🏆 Read books enter the **Hall of Fame** with the club's final score.\n\n"
+            "If you notice an issue, tap \"Report an error\"."
+        ),
+        "ru": (
+            "ℹ️ **Как работает BookVoter**\n\n"
+            "1. **Предложите книгу**\n"
+            "   В группе напишите:\n"
+            "   `/suggest Название книги`\n\n"
+            "2. **Выберите подходящее издание**\n"
+            "   Бот покажет найденные варианты. Нажмите на нужную книгу — она попадёт в общий список клуба.\n\n"
+            "3. **Оцените интерес к книгам**\n"
+            "   Перейдите в личные сообщения с ботом и поставьте книгам оценку от 1 до 10.\n"
+            "   Чем выше ваша оценка, тем сильнее вы хотите прочитать книгу.\n"
+            "   Ваши оценки интереса видите только вы.\n\n"
+            "4. **Голосуйте за следующую книгу**\n"
+            "   Книги с самыми высокими оценками интереса попадают в следующее голосование.\n"
+            "   Администратор запускает голосование, и участники выбирают следующую книгу клуба.\n"
+            "   Голосование длится до 24 часов и может завершиться раньше, если одна книга получит больше половины голосов.\n\n"
+            "5. **Читайте и оценивайте**\n"
+            "   После выбора бот отправит книгу в группу.\n"
+            "   Когда клуб закончит чтение, поставьте книге итоговую оценку от 1 до 10 — или отметьте, что не читали её.\n\n"
+            "🏆 Прочитанные книги попадают в **Зал славы** клуба с итоговой оценкой.\n\n"
+            "Если заметили проблему, нажмите «Сообщить об ошибке»."
+        )
     },
     "click_below_to_rate": {
         "en": "Click below to rate unrated books in private messages!",

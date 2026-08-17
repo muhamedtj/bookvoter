@@ -295,6 +295,7 @@ async def get_backlog_books_full_info(db_path: str, chat_id: int) -> List[Dict[s
             return [dict(r) for r in rows]
 
 
+
 async def get_unrated_backlog_books_for_user(db_path: str, tg_id: int) -> List[Dict[str, Any]]:
     """Fetch all backlog books across chats where user is active that user hasn't rated yet."""
     internal_id = await get_or_create_user(db_path, tg_id)
@@ -366,14 +367,13 @@ async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -
         return {"avg_rating": avg_rating, "votes_count": votes_count}
 
 
-async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> Dict[str, Any]:
+async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
     """
-    Select top N backlog books based on average rating.
-    Returns dict containing 'books' list and 'excluded_genre' set to None.
+    Select top N backlog books based on average interest score from backlog_ratings.
+    Ordered by avg_score DESC, b.id ASC.
     """
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-
         query = """
             SELECT b.id, b.chat_id, b.title, b.author, b.genre,
                    COALESCE(AVG(r.score), 0) as avg_score,
@@ -386,8 +386,7 @@ async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int 
             LIMIT ?
         """
         async with db.execute(query, (chat_id, limit)) as cursor:
-            results = [dict(r) for r in await cursor.fetchall()]
-            return {"books": results, "excluded_genre": None}
+            return [dict(r) for r in await cursor.fetchall()]
 
 
 async def update_books_status(db_path: str, book_ids: List[int], status: str) -> None:

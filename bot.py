@@ -179,6 +179,7 @@ async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List
         return [{
             "title": query.title(),
             "author": "Library Bot",
+            "genre": None,
             "raw_label": query.title()
         }]
     except Exception as e:
@@ -227,10 +228,25 @@ async def handle_start(message: Message, command: CommandObject):
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
         [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_how_it_works", lang), callback_data="show_help")],
         [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
     ])
 
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.message(Command("help"))
+async def handle_help_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    await message.answer(t("help_msg", lang), parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "show_help")
+async def handle_show_help_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    await callback.message.answer(t("help_msg", lang), parse_mode="Markdown")
 
 
 @router.callback_query(F.data == "report_error")
@@ -314,6 +330,7 @@ async def handle_set_language_callback(callback: CallbackQuery):
     welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_open_control_panel", lang_code), callback_data="open_control_panel")],
         [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_how_it_works", lang_code), callback_data="show_help")],
         [InlineKeyboardButton(text=t("btn_report_error", lang_code), callback_data="report_error")]
     ])
     await callback.message.edit_text(
@@ -401,12 +418,19 @@ async def handle_suggestion_select(callback: CallbackQuery):
         await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
         return
 
+    raw_genre = selected_book.get("genre")
+    invalid_genres = {"general", "без жанра", "other", "прочее / другое", "n/a", "library bot", "none", ""}
+    if raw_genre and raw_genre.strip().lower() not in invalid_genres:
+        genre_val = raw_genre.strip()
+    else:
+        genre_val = None
+
     book_id = await database.add_book(
         DATABASE_PATH,
         chat_id=chat_id,
         title=selected_book["title"],
         author=selected_book["author"],
-        genre=None,
+        genre=genre_val,
         suggested_by_tg_id=user_id,
         file_id=selected_book.get("download_cmd") or None
     )
@@ -584,14 +608,13 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
         await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
         return
 
-    result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
-    books = result_dict["books"]
-    if not books:
+    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+    if not top_books:
         await callback.answer(t("no_backlog_books_err", lang), show_alert=True)
         return
 
     await callback.answer()
-    await launch_poll_for_books(chat_id, books, lang)
+    await launch_poll_for_books(chat_id, top_books, lang)
 
     await callback.message.edit_text(
         t("vote_started_msg", lang),
@@ -885,8 +908,12 @@ async def handle_vote_cmd(message: Message):
         await message.answer(t("only_admins_allowed", lang))
         return
 
-    result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
-    top_books = result_dict["books"]
+    active_poll = await database.get_active_poll(DATABASE_PATH, message.chat.id)
+    if active_poll:
+        await message.answer(t("vote_in_progress_err", lang))
+        return
+
+    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
     if not top_books:
         await message.answer(t("no_backlog_books_err", lang))
         return
