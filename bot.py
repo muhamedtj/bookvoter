@@ -271,6 +271,40 @@ async def get_admin_panel_view(chat_id: int, lang: str, db_path: str = DATABASE_
 
 # --- Handlers ---
 
+@router.callback_query(F.data == "show_help")
+async def handle_show_help_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    bot_info = await bot.get_me()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{bot_info.username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_to_welcome")]
+    ])
+    await callback.message.edit_text(t("how_it_works_text", lang), parse_mode="Markdown", reply_markup=markup)
+
+
+@router.callback_query(F.data == "back_to_welcome")
+async def handle_back_to_welcome_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang, bot_info.username)
+    await callback.message.edit_text(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
+
+
+@router.message(Command("help"))
+async def handle_help_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    bot_info = await bot.get_me()
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{bot_info.username}?start=rate_new")],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
+    ])
+    await message.answer(t("how_it_works_text", lang), parse_mode="Markdown", reply_markup=markup)
+
+
 @router.message(CommandStart())
 async def handle_start(message: Message, command: CommandObject):
     await register_user_and_chat(message)
