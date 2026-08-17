@@ -11,6 +11,7 @@ import bot_core as core
 
 
 _installed = False
+_bot_username = None
 
 # Generic commands are deliberately silent in groups. They are common enough to
 # collide with MovieVoter or other future bots. BookVoter's group UX is button-
@@ -30,14 +31,26 @@ _SILENT_GENERIC_GROUP_COMMANDS = {
 }
 
 
-def _command_name(text: str) -> str:
+def _command_parts(text: str):
     if not text:
-        return ""
+        return "", None
     first = text.strip().split(maxsplit=1)[0]
     if not first.startswith("/"):
-        return ""
-    # /command@BotUsername -> /command
-    return first.split("@", 1)[0].lower()
+        return "", None
+    raw = first[1:]
+    if "@" in raw:
+        name, target = raw.split("@", 1)
+        return f"/{name.lower()}", target.lower()
+    return f"/{raw.lower()}", None
+
+
+async def _own_username() -> str:
+    global _bot_username
+    if _bot_username:
+        return _bot_username
+    info = await core.bot.get_me()
+    _bot_username = (info.username or "").lower()
+    return _bot_username
 
 
 async def _show_public_menu(message) -> None:
@@ -115,17 +128,24 @@ class _EntryRoutingMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
         text = getattr(event, "text", None) or ""
         chat = getattr(event, "chat", None)
-        command = _command_name(text)
+        command, target = _command_parts(text)
 
         if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
             return await handler(event, data)
 
-        # Generic commands are intentionally ignored by BookVoter in groups.
-        # If another bot owns /start, /help, /suggest, /admin, etc., BookVoter
-        # stays out of the way. When deletion permission exists, the command is
-        # also removed from the chat to keep the group clean.
+        # A command explicitly addressed to another bot is not ours. Leave both
+        # the message and routing untouched; the other bot must be free to act.
+        if target and target != await _own_username():
+            return await handler(event, data)
+
+        # Generic bare commands are intentionally ignored by BookVoter in groups,
+        # but NOT deleted: another bot in the same group may legitimately own
+        # /start, /help, /suggest, /admin, etc. If a generic command is explicitly
+        # addressed to BookVoter, it is safe to remove it after suppressing the
+        # retired legacy behavior.
         if command in _SILENT_GENERIC_GROUP_COMMANDS:
-            await core.cleanup_command_message(event)
+            if target:
+                await core.cleanup_command_message(event)
             return None
 
         # /bookvoter remains a legacy, product-specific alias for /books.
