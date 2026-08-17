@@ -1,8 +1,8 @@
 """Group entry routing for BookVoter.
 
 Telegram's /start is kept for private-chat onboarding and deep links only.
-Group interaction uses BookVoter-specific commands so another bot can coexist
-in the same group without sharing generic entry/admin commands.
+Group interaction uses BookVoter-specific commands so another domain bot can
+coexist in the same group without sharing generic entry/admin commands.
 """
 
 from aiogram import BaseMiddleware
@@ -11,6 +11,23 @@ import bot_core as core
 
 
 _installed = False
+
+# Generic commands are deliberately silent in groups. They are common enough to
+# collide with MovieVoter or other future bots. BookVoter's group UX is button-
+# first, with only /books, /bookadmin and /booktimer as public command names.
+_SILENT_GENERIC_GROUP_COMMANDS = {
+    "/start",
+    "/help",
+    "/admin",
+    "/suggest",
+    "/backlog",
+    "/hof",
+    "/halloffame",
+    "/language",
+    "/votetimer",
+    "/finish_vote",
+    "/reports",
+}
 
 
 def _command_name(text: str) -> str:
@@ -103,23 +120,18 @@ class _EntryRoutingMiddleware(BaseMiddleware):
         if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
             return await handler(event, data)
 
-        # /start is a Telegram onboarding/deep-link command. In a group it is
-        # intentionally silent so several domain bots can coexist without all
-        # reacting to the same generic command.
-        if command == "/start":
+        # Generic commands are intentionally ignored by BookVoter in groups.
+        # If another bot owns /start, /help, /suggest, /admin, etc., BookVoter
+        # stays out of the way. When deletion permission exists, the command is
+        # also removed from the chat to keep the group clean.
+        if command in _SILENT_GENERIC_GROUP_COMMANDS:
             await core.cleanup_command_message(event)
             return None
 
-        # /bookvoter is the public product menu, not the admin panel.
+        # /bookvoter remains a legacy, product-specific alias for /books.
         if command == "/bookvoter":
             await core.cleanup_command_message(event)
             await _show_public_menu(event)
-            return None
-
-        # Generic /admin is deliberately retired in groups to avoid collisions
-        # with other bots. BookVoter administration uses /bookadmin.
-        if command == "/admin":
-            await core.cleanup_command_message(event)
             return None
 
         return await handler(event, data)
@@ -144,6 +156,6 @@ def install() -> None:
     # Intercept legacy handlers registered in bot_core without rewriting them.
     core.router.message.outer_middleware(_EntryRoutingMiddleware())
 
-    # New collision-safe commands.
+    # Collision-safe public commands.
     core.router.message(core.Command("books"))(_books_command)
     core.router.message(core.Command("bookadmin"))(_bookadmin_command)
