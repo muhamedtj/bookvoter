@@ -8,7 +8,7 @@ class DummyButton:
 
 query = "Толкин"
 
-# Scenario: Intermediate message with button "Толкин", followed by full book card
+# Scenario 1: Intermediate message with button "Толкин"
 intermediate_text = "Поиск по запросу: Толкин..."
 intermediate_markup = [[DummyButton("Толкин", "search_tolkien")]]
 
@@ -20,6 +20,19 @@ res_intermediate = downloader.parse_library_response(
 print("Intermediate response parse result:", res_intermediate)
 assert res_intermediate == [], f"Expected [], got {res_intermediate}"
 
+# Scenario 2: Pagination buttons message (e.g. -1-, 2, 3, 4>, 40>)
+pagination_markup = [
+    [DummyButton("-1-", "page_1"), DummyButton("2", "page_2"), DummyButton("3", "page_3"), DummyButton("4>", "page_4"), DummyButton("40>", "page_40")]
+]
+res_pagination = downloader.parse_library_response(
+    msg_text="",
+    reply_markup=pagination_markup,
+    query_title=query
+)
+print("Pagination buttons parse result:", res_pagination)
+assert res_pagination == [], f"Expected [], got {res_pagination}"
+
+# Scenario 3: Full book card message
 sample_text = """Найдено: 200 книг
 
 Толкин и Великая война. На пороге Средиземья - ru

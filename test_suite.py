@@ -40,6 +40,17 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(res1, [], "Intermediate prompt button 'Толкин' must be ignored and return empty results")
 
+        # Test pagination buttons in inline keyboard (e.g. -1-, 2, 3, 4>, 40>)
+        pagination_markup = [
+            [DummyButton("-1-", "page_1"), DummyButton("2", "page_2"), DummyButton("3", "page_3"), DummyButton("4>", "page_4"), DummyButton("40>", "page_40")]
+        ]
+        res_page = downloader.parse_library_response(
+            msg_text="",
+            reply_markup=pagination_markup,
+            query_title=query_title
+        )
+        self.assertEqual(res_page, [], "Pagination buttons must be ignored and return empty results")
+
         # 2. Message 2: Full book card message
         msg2_text = (
             "Толкин и Великая война. На пороге Средиземья - ru\n"

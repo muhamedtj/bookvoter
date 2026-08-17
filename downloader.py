@@ -207,6 +207,9 @@ def parse_library_response(
                     continue
                 if any(p in btn_lower for p in ["поиск...", "искать", "назад", "далее", "cancel", "отмена", "search"]):
                     continue
+                # Ignore pagination/navigation buttons (e.g. -1-, 2, 3, 4>, 40>, <<, >>, etc.)
+                if re.match(r"^\s*[-<]?\s*\d+\s*[->]?\s*$", btn_text) or btn_lower in ["<", ">", "<<", ">>", "next", "prev", "назад", "далее"]:
+                    continue
 
                 # Ignore sub-search or navigation callback_data
                 if (cb_data.startswith("search") or cb_data.startswith("page") or cb_data.startswith("find")) and not ("download" in cb_data.lower() or cb_data.startswith("/")):
@@ -311,7 +314,23 @@ async def search_options_via_userbot(query_title: str) -> None:
                 logging.warning(f"Error while polling chat history: {poll_err}")
 
             if candidate_results:
-                results = candidate_results[:5]
+                # Settling delay to ensure the library bot finishes sending/editing the final message
+                await asyncio.sleep(1.5)
+
+                # Re-check chat history prioritizing the LATEST message (highest message.id)
+                latest_results = []
+                try:
+                    async for message in app.get_chat_history(target_channel, limit=15):
+                        if message.id <= query_msg.id:
+                            continue
+                        msg_books = parse_message_for_books(message, query_title)
+                        if msg_books:
+                            latest_results = msg_books
+                            break # Stop at the NEWEST message with valid books
+                except Exception as check_err:
+                    logging.warning(f"Error re-checking latest chat history: {check_err}")
+
+                results = (latest_results or candidate_results)[:5]
                 break
 
             await asyncio.sleep(poll_interval)
