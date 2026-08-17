@@ -13,9 +13,6 @@ import bot_core as core
 _installed = False
 _bot_username = None
 
-# Generic commands are deliberately silent in groups. They are common enough to
-# collide with MovieVoter or other future bots. BookVoter's group UX is button-
-# first, with only /books, /bookadmin and /booktimer as public command names.
 _SILENT_GENERIC_GROUP_COMMANDS = {
     "/start",
     "/help",
@@ -70,58 +67,30 @@ async def _show_public_menu(message) -> None:
             return
         lang = current_lang
         bot_info = await core.bot.get_me()
-        markup = core.get_welcome_keyboard(
-            lang,
-            bot_info.username,
-            is_private=False,
-            chat_id=chat_id,
-        )
-        await core.send_or_replace_group_ui(
-            message,
-            core.t("welcome_msg", lang),
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
+        markup = core.get_welcome_keyboard(lang, bot_info.username, is_private=False, chat_id=chat_id)
+        await core.send_or_replace_group_ui(message, core.t("welcome_msg", lang), parse_mode="HTML", reply_markup=markup)
         return
 
-    # In private chat /bookvoter and /books simply open the normal BookVoter menu.
     lang = await core.get_lang(chat_id, user_id)
     bot_info = await core.bot.get_me()
-    markup = core.get_welcome_keyboard(
-        lang,
-        bot_info.username,
-        is_private=True,
-        chat_id=chat_id,
-    )
+    markup = core.get_welcome_keyboard(lang, bot_info.username, is_private=True, chat_id=chat_id)
     await message.answer(core.t("welcome_msg", lang), parse_mode="HTML", reply_markup=markup)
 
 
 async def _show_admin_panel(message) -> None:
     await core.register_user_and_chat(message)
-    lang = await core.get_lang(
-        message.chat.id,
-        message.from_user.id if message.from_user else None,
-    )
+    lang = await core.get_lang(message.chat.id, message.from_user.id if message.from_user else None)
 
     if message.chat.type == core.ChatType.PRIVATE:
         await message.answer(core.t("control_panel_dm_notice", lang), parse_mode="HTML")
         return
 
     if not message.from_user or not await core.is_admin(message.chat.id, message.from_user.id):
-        await core.send_ephemeral_reply(
-            message,
-            core.t("only_admins_allowed", lang),
-            delay_seconds=30,
-        )
+        await core.send_ephemeral_reply(message, core.t("only_admins_allowed", lang), delay_seconds=30)
         return
 
     panel_text, markup = await core.get_admin_panel_view(message.chat.id, lang)
-    await core.send_or_replace_group_ui(
-        message,
-        panel_text,
-        parse_mode="HTML",
-        reply_markup=markup,
-    )
+    await core.send_or_replace_group_ui(message, panel_text, parse_mode="HTML", reply_markup=markup)
 
 
 class _EntryRoutingMiddleware(BaseMiddleware):
@@ -133,22 +102,14 @@ class _EntryRoutingMiddleware(BaseMiddleware):
         if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
             return await handler(event, data)
 
-        # A command explicitly addressed to another bot is not ours. Leave both
-        # the message and routing untouched; the other bot must be free to act.
         if target and target != await _own_username():
-            return await handler(event, data)
+            return None
 
-        # Generic bare commands are intentionally ignored by BookVoter in groups,
-        # but NOT deleted: another bot in the same group may legitimately own
-        # /start, /help, /suggest, /admin, etc. If a generic command is explicitly
-        # addressed to BookVoter, it is safe to remove it after suppressing the
-        # retired legacy behavior.
         if command in _SILENT_GENERIC_GROUP_COMMANDS:
             if target:
                 await core.cleanup_command_message(event)
             return None
 
-        # /bookvoter remains a legacy, product-specific alias for /books.
         if command == "/bookvoter":
             await core.cleanup_command_message(event)
             await _show_public_menu(event)
@@ -173,9 +134,6 @@ def install() -> None:
         return
     _installed = True
 
-    # Intercept legacy handlers registered in bot_core without rewriting them.
     core.router.message.outer_middleware(_EntryRoutingMiddleware())
-
-    # Collision-safe public commands.
     core.router.message(core.Command("books"))(_books_command)
     core.router.message(core.Command("bookadmin"))(_bookadmin_command)
