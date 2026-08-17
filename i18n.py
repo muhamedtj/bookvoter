@@ -5,10 +5,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Unknown Author",
         "ru": "Неизвестный автор"
     },
-    "general_genre": {
-        "en": "General",
-        "ru": "Без жанра"
-    },
     "select_language_prompt": {
         "en": "🌐 **Please select your language / Пожалуйста, выберите язык:**",
         "ru": "🌐 **Пожалуйста, выберите язык / Please select your language:**"
@@ -19,49 +15,88 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     "welcome_msg": {
         "en": (
-            "📚 **Welcome to BookVoter Bot!**\n\n"
-            "Commands:\n"
-            "• `/suggest` [book title] - Suggest a book for your group backlog.\n"
-            "• `/backlog` - View full group backlog list and details.\n"
-            "• `/bookvoter` - Control panel (Start/Finish vote, Delete books, Stats).\n"
-            "• `/chat_stats` - View local group stats.\n"
-            "• `/language` - Change bot language.\n"
-            "• Click on book rating links sent in groups to rate backlog books privately!"
+            "📚 **BookVoter**\n\n"
+            "Choose your next book with your club.\n\n"
+            "Suggest books, rate interest, vote, and give final ratings after reading.\n\n"
+            "📖 Suggest a book:\n"
+            "`/suggest Book title`"
         ),
         "ru": (
-            "📚 **Добро пожаловать в BookVoter Bot!**\n\n"
-            "Команды:\n"
-            "• `/suggest` [название книги] - Предложить книгу в бэклог группы.\n"
-            "• `/backlog` - Просмотреть полный список бэклога группы.\n"
-            "• `/bookvoter` - Панель управления (Голосование, Завершение чтения, Удаление книг, Статистика).\n"
-            "• `/chat_stats` - Статистика и аналитика этой группы.\n"
-            "• `/language` - Сменить язык бота.\n"
-            "• Нажимайте на ссылки оценки книг в группе, чтобы оценивать их в личных сообщениях!"
+            "📚 **BookVoter**\n\n"
+            "Выбирайте следующую книгу вместе с клубом.\n\n"
+            "Предлагайте книги, оценивайте интерес, голосуйте и выставляйте итоговые оценки после чтения.\n\n"
+            "📖 Предложить книгу:\n"
+            "`/suggest Название книги`"
         )
     },
+    # Buttons
+    "btn_how_it_works": {
+        "en": "ℹ️ How it works",
+        "ru": "ℹ️ Как работает бот"
+    },
+    "btn_rate_books": {
+        "en": "⭐ Rate books",
+        "ru": "⭐ Оценить книги"
+    },
     "btn_open_control_panel": {
-        "en": "⚙️ Open Control Panel",
-        "ru": "⚙️ Открыть панель управления"
+        "en": "⚙️ Control panel",
+        "ru": "⚙️ Панель управления"
     },
     "btn_report_error": {
-        "en": "🐛 Report an Error",
+        "en": "🐛 Report an error",
         "ru": "🐛 Сообщить об ошибке"
     },
-    "error_reported_thanks": {
-        "en": "Thank you! Error report sent to developer.",
-        "ru": "Спасибо! Отчет об ошибке отправлен разработчику."
+    "btn_start_vote": {
+        "en": "🎲 Start voting",
+        "ru": "🎲 Начать голосование"
     },
-    "report_error_prompt": {
-        "en": "Click below if you encountered an issue to send a diagnostic report to the developer:",
-        "ru": "Нажмите ниже, если у вас возникли неполадки, чтобы отправить диагностический отчет разработчику:"
+    "btn_finish_vote_early": {
+        "en": "⏹ Finish voting early",
+        "ru": "⏹ Завершить голосование досрочно"
+    },
+    "btn_finish_reading": {
+        "en": "🏆 Finish reading",
+        "ru": "🏆 Завершить чтение"
+    },
+    "btn_group_stats": {
+        "en": "📊 Group stats",
+        "ru": "📊 Статистика группы"
+    },
+    "btn_audit_backlog": {
+        "en": "🔍 Audit backlog",
+        "ru": "🔍 Проверить бэклог"
+    },
+    "btn_delete_book": {
+        "en": "🗑 Delete book",
+        "ru": "🗑 Удалить книгу"
+    },
+    "btn_back": {
+        "en": "⬅️ Back",
+        "ru": "⬅️ Назад"
+    },
+    "btn_back_to_panel": {
+        "en": "⬅️ Back to panel",
+        "ru": "⬅️ Назад в панель"
+    },
+    "btn_did_not_read": {
+        "en": "Didn't read",
+        "ru": "Не читал"
+    },
+    "error_reported_thanks": {
+        "en": "✅ Thank you. The error report has been sent.",
+        "ru": "✅ Спасибо. Сообщение об ошибке отправлено."
+    },
+    "control_panel_dm_notice": {
+        "en": "⚙️ The Control Panel is available in the book club group chat. Open the group and type `/bookvoter`.",
+        "ru": "⚙️ Панель управления доступна в группе книжного клуба. Откройте группу и вызовите `/bookvoter`."
     },
     "suggest_usage": {
         "en": "Please specify a book title, e.g.: `/suggest Dune`",
         "ru": "Пожалуйста, укажите название книги, например: `/suggest Дюна`"
     },
     "searching_google_books": {
-        "en": "Searching book in library...",
-        "ru": "Ищем книгу в библиотеке..."
+        "en": "🔎 Searching for the book...",
+        "ru": "🔎 Ищем книгу..."
     },
     "google_books_api_error": {
         "en": "Could not connect to the book library database. Please try again later.",
@@ -75,10 +110,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "⚠️ This book is already in the club list!",
         "ru": "⚠️ Эта книга уже есть в списке клуба!"
     },
-    "no_books_found": {
-        "en": "No books found for your query. Please try a different title.",
-        "ru": "По вашему запросу ничего не найдено. Попробуйте другое название."
-    },
     "select_matching_book": {
         "en": "Select the matching edition from search results:",
         "ru": "Выберите подходящее издание из результатов поиска:"
@@ -87,21 +118,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Selection expired or invalid. Please run /suggest again.",
         "ru": "Выбор истек или недействителен. Пожалуйста, запустите /suggest снова."
     },
-    "book_saved_cb": {
-        "en": "Book saved to backlog!",
-        "ru": "Книга сохранена в бэклог!"
-    },
-    "book_added_title": {
-        "en": "✅ **Book Added to Backlog!**",
-        "ru": "✅ **Книга добавлена в бэклог!**"
-    },
     "book_added_confirmation_exact": {
-        "en": "✅ Book **{title}** (**{author}**) successfully added to backlog!",
-        "ru": "✅ Книга **{title}** (**{author}**) успешно добавлена в бэклог!"
-    },
-    "btn_how_it_works": {
-        "en": "ℹ️ How it works",
-        "ru": "ℹ️ Как работает бот"
+        "en": "✅ Book **«{title}»** ({author}) added to backlog.",
+        "ru": "✅ Книга «**{title}**» ({author}) добавлена в бэклог."
     },
     "help_msg": {
         "en": (
@@ -151,25 +170,25 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Click below to rate unrated books in private messages!",
         "ru": "Нажмите ниже, чтобы оценить книги в личных сообщениях!"
     },
-    "btn_rate_backlog": {
-        "en": "⭐ Rate Backlog Books",
-        "ru": "⭐ Оценить книги из бэклога"
-    },
     "all_caught_up_rating": {
         "en": "🎉 **All caught up!** You have rated all available backlog books for your groups.",
         "ru": "🎉 **Всё оценено!** Вы оценили все доступные книги из бэклога ваших групп."
     },
     "rate_prompt_group": {
-        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n\nHow strongly do you want to read this book (from 1 to 10)?",
-        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n\nНасколько сильно вы хотите читать эту книгу (от 1 до 10)?"
+        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n\nHow strongly do you want to read this book?",
+        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n\nНасколько сильно вы хотите прочитать эту книгу?"
     },
     "saved_score_cb": {
         "en": "Saved score: {score}/10",
         "ru": "Сохранена оценка: {score}/10"
     },
     "backlog_list_header": {
-        "en": "📚 **Group Backlog List**\n\n",
-        "ru": "📚 **Список бэклога группы**\n\n"
+        "en": "📚 **Club Backlog**\n\n",
+        "ru": "📚 **Бэклог клуба**\n\n"
+    },
+    "backlog_item_format": {
+        "en": "{idx}. **{title}** — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n",
+        "ru": "{idx}. **{title}** — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n"
     },
     "backlog_empty": {
         "en": "📜 Backlog is currently empty. Add books using `/suggest`!",
@@ -179,37 +198,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "⚠️ Only group administrators can perform this action.",
         "ru": "⚠️ Только администраторы группы могут выполнять это действие."
     },
+    # Admin Panel States
     "admin_panel_title": {
         "en": "⚙️ **BookVoter Control Panel**",
         "ru": "⚙️ **Панель управления BookVoter**"
     },
-    "btn_start_vote": {
-        "en": "🎲 Start Next Book Vote",
-        "ru": "🎲 Начать голосование за книгу"
+    "admin_state_ready": {
+        "en": "⚙️ **BookVoter Control Panel**\n\n📚 You can choose the next book.",
+        "ru": "⚙️ **Панель управления BookVoter**\n\n📚 Можно выбрать следующую книгу."
     },
-    "btn_finish_vote_early": {
-        "en": "⏹️ Finish Current Vote Early",
-        "ru": "⏹️ Завершить голосование досрочно"
+    "admin_state_voting": {
+        "en": "⚙️ **BookVoter Control Panel**\n\n🗳 Voting for the next book is currently in progress.",
+        "ru": "⚙️ **Панель управления BookVoter**\n\n🗳 Сейчас идёт голосование за следующую книгу."
     },
-    "btn_finish_reading": {
-        "en": "🏆 Finish Reading (Hall of Fame)",
-        "ru": "🏆 Завершить чтение (Зал славы)"
-    },
-    "btn_delete_book": {
-        "en": "🗑️ Delete Book from Backlog",
-        "ru": "🗑️ Удалить книгу из бэклога"
-    },
-    "btn_audit_backlog": {
-        "en": "🔍 Audit Backlog Activity",
-        "ru": "🔍 Проверка активности бэклога"
-    },
-    "btn_group_stats": {
-        "en": "📊 Group Stats",
-        "ru": "📊 Статистика группы"
-    },
-    "btn_back_to_menu": {
-        "en": "⬅️ Back to Menu",
-        "ru": "⬅️ Назад в меню"
+    "admin_state_reading": {
+        "en": "⚙️ **BookVoter Control Panel**\n\n📖 Currently reading: **{title}** — {author}",
+        "ru": "⚙️ **Панель управления BookVoter**\n\n📖 Сейчас читаем: **{title}** — {author}"
     },
     "audit_title": {
         "en": "🔍 **Backlog Activity Audit Report:**\n\n",
@@ -235,17 +239,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Last 30 Days",
         "ru": "За 30 дней"
     },
-    "chat_stats_title": {
-        "en": "📊 **Local Group Statistics ({filter_label})**\n\n",
-        "ru": "📊 **Локальная статистика группы ({filter_label})**\n\n"
-    },
-    "superadmin_stats_title": {
-        "en": "🌐 **Global Superadmin Dashboard ({filter_label})**\n\n",
-        "ru": "🌐 **Глобальная панель супер-админа ({filter_label})**\n\n"
-    },
     "select_book_to_delete": {
-        "en": "🗑️ **Select a book to delete from backlog or active list:**",
-        "ru": "🗑️ **Выберите книгу для удаления из бэклога или списков:**"
+        "en": "🗑 **Select a book to delete from backlog:**",
+        "ru": "🗑 **Выберите книгу для удаления из бэклога:**"
     },
     "no_books_to_delete": {
         "en": "❌ No books found in backlog to delete.",
@@ -260,52 +256,48 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "⚠️ В этой группе уже идет голосование!"
     },
     "no_backlog_books_err": {
-        "en": "❌ No backlog books available to start a vote. Suggest some books with `/suggest` first!",
-        "ru": "❌ В бэклоге нет книг для голосования. Сначала предложите книги с помощью `/suggest`!"
+        "en": "There are currently no books in the backlog for voting.",
+        "ru": "В бэклоге пока нет книг для голосования."
     },
     "poll_question": {
-        "en": "🗳️ Vote for the next book to read!",
-        "ru": "🗳️ Голосуйте за следующую книгу для чтения!"
+        "en": "🗳 Vote for the next book to read!",
+        "ru": "🗳 Голосуйте за следующую книгу для чтения!"
     },
     "vote_started_msg": {
-        "en": "⏳ **Vote started!** The poll will automatically close in 24 hours.",
-        "ru": "⏳ **Голосование начато!** Опрос автоматически закроется через 24 часа."
+        "en": "🗳 Voting has started.",
+        "ru": "🗳 Голосование началось."
     },
     "no_active_vote_err": {
         "en": "⚠️ No active vote found to finish.",
         "ru": "⚠️ Нет активного голосования для завершения."
     },
     "voting_ended_title": {
-        "en": "🏆 **Voting Ended!**\n\nThe winner is: **{title}** by **{author}**!\n📥 Fetching book file from library...",
-        "ru": "🏆 **Голосование завершено!**\n\nПобедитель: **{title}** ({author})!\n📥 Ищем файл книги в библиотеке..."
+        "en": "🏆 **Next book selected**\n\n**{title}** — {author}",
+        "ru": "🏆 **Выбрана следующая книга**\n\n**{title}** — {author}"
     },
     "book_file_caption": {
         "en": "📚 Here is your book: **{title}**",
         "ru": "📚 Ваша книга: **{title}**"
     },
     "file_not_found_in_lib": {
-        "en": "❌ File not found in library for **{title}**.",
-        "ru": "❌ Файл книги **{title}** не найден в библиотеке."
+        "en": "⚠️ Book selected, but the file could not be retrieved automatically.",
+        "ru": "⚠️ Книга выбрана, но файл не удалось получить автоматически."
     },
     "file_download_err": {
-        "en": "❌ An error occurred while downloading **{title}**.",
-        "ru": "❌ Произошла ошибка при скачивании **{title}**."
+        "en": "⚠️ Book selected, but the file could not be retrieved automatically.",
+        "ru": "⚠️ Книга выбрана, но файл не удалось получить автоматически."
     },
     "no_active_reading_err": {
         "en": "No currently active book to finish.",
         "ru": "Нет читаемой книги для завершения."
     },
     "added_to_hof_cb": {
-        "en": "Reading finished! Rating poll sent to chat.",
-        "ru": "Чтение завершено! Опрос оценки книги отправлен в чат."
+        "en": "Reading finished! Rating card sent to chat.",
+        "ru": "Чтение завершено! Карточка оценки отправлена в чат."
     },
     "finish_reading_card_title": {
-        "en": "📖 **Reading Completed!**\n\nBook: **{title}** ({author})\n\nPlease rate this book after reading:",
-        "ru": "📖 **Чтение книги завершено!**\n\nКнига: **{title}** ({author})\n\nПожалуйста, оцените прочитанную книгу:"
-    },
-    "btn_did_not_read": {
-        "en": "🙈 Didn't read",
-        "ru": "🙈 Не читал"
+        "en": "📖 **{title}** — {author}\n\nHow do you rate this book?",
+        "ru": "📖 **{title}** — {author}\n\nКак вы оцениваете книгу?"
     },
     "saved_read_score_cb": {
         "en": "Your score {score}/10 accepted!",
@@ -320,8 +312,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Спасибо! Ваша оценка принята.\n\nСредний балл по книге **{title}** сейчас: **{avg_rating}** (на основе {count} голосов)."
     },
     "hof_header": {
-        "en": "🏆 **Hall of Fame (Smart Weighted Rating)**\nSorted by Bayesian Weighted Rating (WR):\n\n",
-        "ru": "🏆 **Зал славы (Умный рейтинг)**\nОтсортировано по взвешенному рейтингу:\n\n"
+        "en": "🏆 **Hall of Fame**\n\n",
+        "ru": "🏆 **Зал славы**\n\n"
     },
     "hof_low_votes_header": {
         "en": "\n\n⚠️ **Low Votes (< {min_votes} votes):**\n",
@@ -332,16 +324,16 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "🏆 Зал славы пока пуст."
     },
     "hof_item_format": {
-        "en": "{idx}. **{title}** ({author}) — ⭐ **WR: {wr}** | Avg: **{score}** ({count} votes)",
-        "ru": "{idx}. **{title}** ({author}) — ⭐ **Рейтинг: {wr}** | Средний балл: **{score}** (на основе {count} голосов)"
+        "en": "{idx}. **{title}** — {author}\n   ⭐ {wr} · 👥 {count}",
+        "ru": "{idx}. **{title}** — {author}\n   ⭐ {wr} · 👥 {count}"
     },
     "btn_hof_delete_book": {
-        "en": "🗑️ Delete Book from Hall of Fame",
-        "ru": "🗑️ Удалить книгу из Зала славы"
+        "en": "🗑 Delete Book from Hall of Fame",
+        "ru": "🗑 Удалить книгу из Зала славы"
     },
     "select_hof_book_to_delete": {
-        "en": "🗑️ **Select a book to remove from Hall of Fame:**",
-        "ru": "🗑️ **Выберите книгу для удаления из Зала славы:**"
+        "en": "🗑 **Select a book to remove from Hall of Fame:**",
+        "ru": "🗑 **Выберите книгу для удаления из Зала славы:**"
     },
     "hof_confirm_delete_prompt": {
         "en": "❓ Are you sure you want to remove **{title}** from the Hall of Fame?",
@@ -358,10 +350,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "hof_deleted_success": {
         "en": "✅ Book **{title}** removed from Hall of Fame.",
         "ru": "✅ Книга **{title}** была удалена из Зала славы."
-    },
-    "hof_title": {
-        "en": "🏆 **Hall of Fame Updated!**\n\n",
-        "ru": "🏆 **Зал славы обновлен!**\n\n"
     },
     "group_stats_text": {
         "en": (

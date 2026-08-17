@@ -6,7 +6,6 @@ import asyncio
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
-from urllib.parse import quote
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, Router
@@ -107,8 +106,8 @@ async def global_error_handler(event: ErrorEvent):
 async def is_admin(chat_id: int, user_id: int) -> bool:
     if user_id in SUPER_ADMIN_IDS:
         return True
-    if chat_id > 0:  # Private chat
-        return True
+    if chat_id > 0:  # Private chat is not a group control context
+        return False
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         return member.status in ("creator", "administrator")
@@ -141,6 +140,31 @@ async def get_lang(chat_id: int, user_id: Optional[int] = None) -> str:
     return await database.get_effective_language(DATABASE_PATH, chat_id, user_id)
 
 
+# UI Helper: Common Welcome Keyboard
+def get_welcome_keyboard(lang: str, bot_username: str, is_private: bool = False) -> InlineKeyboardMarkup:
+    rate_url = f"https://t.me/{bot_username}?start=rate_new"
+    keyboard = [
+        [InlineKeyboardButton(text=t("btn_how_it_works", lang), callback_data="show_help")],
+        [InlineKeyboardButton(text=t("btn_rate_books", lang), url=rate_url)]
+    ]
+    if not is_private:
+        keyboard.append([InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")])
+    keyboard.append([InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+# Helper: Help Screen Keyboard
+def get_help_keyboard(lang: str, bot_username: str, include_back: bool = True) -> InlineKeyboardMarkup:
+    rate_url = f"https://t.me/{bot_username}?start=rate_new"
+    keyboard = [
+        [InlineKeyboardButton(text=t("btn_rate_books", lang), url=rate_url)],
+        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
+    ]
+    if include_back:
+        keyboard.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_to_welcome")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
 # Language Selection Keyboard
 def get_language_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -166,7 +190,6 @@ async def fetch_books_via_userbot(query: str, lang: str = "en") -> Optional[List
 
         if proc.returncode == 0:
             output_str = stdout.decode("utf-8").strip()
-            # Extract JSON array output securely
             for line in reversed(output_str.splitlines()):
                 line_str = line.strip()
                 if line_str.startswith("["):
@@ -208,6 +231,44 @@ def get_finish_vote_lock(chat_id: int) -> asyncio.Lock:
     return finish_vote_locks[chat_id]
 
 
+# --- Admin Panel View Helper ---
+
+async def get_admin_panel_view(chat_id: int, lang: str, db_path: str = DATABASE_PATH) -> Tuple[str, InlineKeyboardMarkup]:
+    """
+    Determine current club state and return formatted state message + inline keyboard.
+    State 1: Ready for vote (no active poll & no book being read) -> Start voting
+    State 2: Voting active (active poll exists) -> Finish voting early
+    State 3: Book selected & reading (book status 'won') -> Finish reading
+    """
+    active_poll = await database.get_active_poll(db_path, chat_id)
+    current_book = await database.get_current_winning_or_reading_book(db_path, chat_id)
+
+    keyboard = []
+
+    if active_poll:
+        # State 2: Vote in progress
+        text = t("admin_state_voting", lang)
+        keyboard.append([InlineKeyboardButton(text=t("btn_finish_vote_early", lang), callback_data="admin_finish_vote_early")])
+    elif current_book:
+        # State 3: Reading in progress
+        text = t("admin_state_reading", lang, title=current_book["title"], author=current_book["author"])
+        keyboard.append([InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")])
+    else:
+        # State 1: Ready for new vote
+        text = t("admin_state_ready", lang)
+        keyboard.append([InlineKeyboardButton(text=t("btn_start_vote", lang), callback_data="admin_start_vote")])
+
+    # Common secondary management buttons
+    keyboard.extend([
+        [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")],
+        [InlineKeyboardButton(text=t("btn_audit_backlog", lang), callback_data="admin_audit_backlog")],
+        [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_to_welcome")]
+    ])
+
+    return text, InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
 # --- Handlers ---
 
 @router.message(CommandStart())
@@ -215,8 +276,9 @@ async def handle_start(message: Message, command: CommandObject):
     await register_user_and_chat(message)
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else chat_id
+    is_private = message.chat.type == ChatType.PRIVATE
 
-    current_lang = await database.get_user_language(DATABASE_PATH, user_id) if message.chat.type == ChatType.PRIVATE else await database.get_chat_language(DATABASE_PATH, chat_id)
+    current_lang = await database.get_user_language(DATABASE_PATH, user_id) if is_private else await database.get_chat_language(DATABASE_PATH, chat_id)
 
     if not current_lang:
         await message.answer(
@@ -229,17 +291,12 @@ async def handle_start(message: Message, command: CommandObject):
     lang = current_lang
     args = command.args
 
-    if args == "rate_new" and message.chat.type == ChatType.PRIVATE:
+    if args == "rate_new" and is_private:
         await send_next_unrated_book(message.from_user.id, message, lang)
         return
 
-    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_open_control_panel", lang), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
-        [InlineKeyboardButton(text=t("btn_how_it_works", lang), callback_data="show_help")],
-        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
-    ])
-
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang, bot_info.username, is_private=is_private)
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
 
 
@@ -247,14 +304,28 @@ async def handle_start(message: Message, command: CommandObject):
 async def handle_help_command(message: Message):
     await register_user_and_chat(message)
     lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
-    await message.answer(t("help_msg", lang), parse_mode="Markdown")
+    bot_info = await bot.get_me()
+    help_markup = get_help_keyboard(lang, bot_info.username, include_back=False)
+    await message.answer(t("help_msg", lang), parse_mode="Markdown", reply_markup=help_markup)
 
 
 @router.callback_query(F.data == "show_help")
 async def handle_show_help_cb(callback: CallbackQuery):
     lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    bot_info = await bot.get_me()
+    help_markup = get_help_keyboard(lang, bot_info.username, include_back=True)
     await callback.answer()
-    await callback.message.answer(t("help_msg", lang), parse_mode="Markdown")
+    await callback.message.edit_text(t("help_msg", lang), parse_mode="Markdown", reply_markup=help_markup)
+
+
+@router.callback_query(F.data == "back_to_welcome")
+async def handle_back_to_welcome_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    is_private = callback.message.chat.type == ChatType.PRIVATE
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang, bot_info.username, is_private=is_private)
+    await callback.answer()
+    await callback.message.edit_text(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
 
 
 @router.callback_query(F.data == "report_error")
@@ -290,23 +361,34 @@ async def handle_backlog_command(message: Message):
     text = t("backlog_list_header", lang)
     for idx, b in enumerate(books, 1):
         s_name = b["suggestor_name"] or (f"@{b['suggestor_username']}" if b["suggestor_username"] else "N/A")
-        text += (
-            f"{idx}. **{b['title']}** — {b['author']}\n"
-            f"   ⭐ {round(b['wish_score'], 1)}/10 | 👤 Suggested by: {s_name}\n\n"
-        )
+        score_formatted = round(b['wish_score'], 1)
+        text += t("backlog_item_format", lang, idx=idx, title=b["title"], author=b["author"], score=score_formatted, suggestor=s_name)
 
-    await message.answer(text, parse_mode="Markdown")
+    bot_info = await bot.get_me()
+    rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
+    markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("btn_rate_books", lang), url=rate_url)]
+    ])
+
+    await message.answer(text, parse_mode="Markdown", reply_markup=markup)
 
 
 @router.callback_query(F.data == "open_control_panel")
 async def handle_open_control_panel_cb(callback: CallbackQuery):
-    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
-    if not await is_admin(callback.message.chat.id, callback.from_user.id):
+    chat_id = callback.message.chat.id
+    lang = await get_lang(chat_id, callback.from_user.id)
+
+    if callback.message.chat.type == ChatType.PRIVATE:
+        await callback.answer(t("control_panel_dm_notice", lang), show_alert=True)
+        return
+
+    if not await is_admin(chat_id, callback.from_user.id):
         await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
+
     await callback.answer()
-    markup = get_admin_keyboard(lang)
-    await callback.message.answer(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
+    panel_text, markup = await get_admin_panel_view(chat_id, lang)
+    await callback.message.edit_text(panel_text, parse_mode="Markdown", reply_markup=markup)
 
 
 @router.message(Command("language"))
@@ -325,8 +407,9 @@ async def handle_set_language_callback(callback: CallbackQuery):
     await register_user_and_chat(callback.message)
     lang_code = callback.data.split(":")[1]
     chat_id = callback.message.chat.id
+    is_private = callback.message.chat.type == ChatType.PRIVATE
 
-    if callback.message.chat.type == ChatType.PRIVATE:
+    if is_private:
         await database.set_user_language(DATABASE_PATH, callback.from_user.id, lang_code)
     else:
         if not await is_admin(chat_id, callback.from_user.id):
@@ -335,12 +418,9 @@ async def handle_set_language_callback(callback: CallbackQuery):
         await database.set_chat_language(DATABASE_PATH, chat_id, lang_code)
 
     await callback.answer(t("language_selected", lang_code))
-    welcome_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_open_control_panel", lang_code), callback_data="open_control_panel")],
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang_code), url=f"https://t.me/{(await bot.get_me()).username}?start=rate_new")],
-        [InlineKeyboardButton(text=t("btn_how_it_works", lang_code), callback_data="show_help")],
-        [InlineKeyboardButton(text=t("btn_report_error", lang_code), callback_data="report_error")]
-    ])
+
+    bot_info = await bot.get_me()
+    welcome_markup = get_welcome_keyboard(lang_code, bot_info.username, is_private=is_private)
     await callback.message.edit_text(
         t("language_selected", lang_code) + "\n\n" + t("welcome_msg", lang_code),
         parse_mode="Markdown",
@@ -362,9 +442,8 @@ async def handle_suggest(message: Message, command: CommandObject):
     books = await fetch_books_via_userbot(query, lang)
 
     if books is None:
-        err_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
-        ])
+        bot_info = await bot.get_me()
+        err_markup = get_welcome_keyboard(lang, bot_info.username, is_private=(message.chat.type == ChatType.PRIVATE))
         await status_msg.edit_text(t("google_books_api_error", lang), reply_markup=err_markup)
         return
 
@@ -426,19 +505,12 @@ async def handle_suggestion_select(callback: CallbackQuery):
         await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
         return
 
-    raw_genre = selected_book.get("genre")
-    invalid_genres = {"general", "без жанра", "other", "прочее / другое", "n/a", "library bot", "none", ""}
-    if raw_genre and raw_genre.strip().lower() not in invalid_genres:
-        genre_val = raw_genre.strip()
-    else:
-        genre_val = None
-
     book_id = await database.add_book(
         DATABASE_PATH,
         chat_id=chat_id,
         title=selected_book["title"],
         author=selected_book["author"],
-        genre=genre_val,
+        genre=None,
         suggested_by_tg_id=user_id,
         file_id=selected_book.get("download_cmd") or None
     )
@@ -448,7 +520,7 @@ async def handle_suggestion_select(callback: CallbackQuery):
     bot_info = await bot.get_me()
     rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
     rate_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
+        [InlineKeyboardButton(text=t("btn_rate_books", lang), url=rate_url)]
     ])
 
     alert_full_info = f"✅ «{selected_book['title']}» ({selected_book['author']})"
@@ -583,24 +655,17 @@ async def handle_poll_update(poll: Poll):
 async def handle_admin(message: Message):
     await register_user_and_chat(message)
     lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+
+    if message.chat.type == ChatType.PRIVATE:
+        await message.answer(t("control_panel_dm_notice", lang), parse_mode="Markdown")
+        return
+
     if not await is_admin(message.chat.id, message.from_user.id):
         await message.answer(t("only_admins_allowed", lang))
         return
 
-    markup = get_admin_keyboard(lang)
-    await message.answer(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
-
-
-def get_admin_keyboard(lang: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_start_vote", lang), callback_data="admin_start_vote")],
-        [InlineKeyboardButton(text=t("btn_finish_vote_early", lang), callback_data="admin_finish_vote_early")],
-        [InlineKeyboardButton(text=t("btn_finish_reading", lang), callback_data="admin_finish_reading")],
-        [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
-        [InlineKeyboardButton(text=t("btn_audit_backlog", lang), callback_data="admin_audit_backlog")],
-        [InlineKeyboardButton(text=t("btn_group_stats", lang), callback_data="admin_group_stats")],
-        [InlineKeyboardButton(text=t("btn_report_error", lang), callback_data="report_error")]
-    ])
+    panel_text, markup = await get_admin_panel_view(message.chat.id, lang)
+    await message.answer(panel_text, parse_mode="Markdown", reply_markup=markup)
 
 
 @router.callback_query(F.data == "admin_start_vote")
@@ -613,6 +678,11 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
 
     active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
     if active_poll:
+        await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
+        return
+
+    current_book = await database.get_current_winning_or_reading_book(DATABASE_PATH, chat_id)
+    if current_book:
         await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
         return
 
@@ -688,19 +758,22 @@ async def handle_admin_audit_backlog(callback: CallbackQuery):
     audit_items = await database.audit_backlog_activity(DATABASE_PATH, chat_id, active_tg_ids)
 
     if not audit_items:
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_back_to_panel", lang), callback_data="admin_main_menu")]
+        ])
         await callback.answer()
-        await callback.message.edit_text(t("audit_clean", lang), parse_mode="Markdown")
+        await callback.message.edit_text(t("audit_clean", lang), parse_mode="Markdown", reply_markup=markup)
         return
 
     text = t("audit_title", lang)
     for item in audit_items:
         s_name = item["suggestor_name"] or (f"@{item['suggestor_username']}" if item["suggestor_username"] else "User")
         reasons_str = ", ".join([t(f"reason_{r}", lang) for r in item["reasons"]])
-        text += f"• **{item['title']}** ({item['author']})\n  👤 Suggested by: {s_name}\n  ⚠️ {reasons_str}\n\n"
+        text += f"• **{item['title']}** — {item['author']}\n  👤 Suggested by: {s_name}\n  ⚠️ {reasons_str}\n\n"
 
     markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_delete_book", lang), callback_data="admin_delete_book")],
-        [InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")]
+        [InlineKeyboardButton(text=t("btn_back_to_panel", lang), callback_data="admin_main_menu")]
     ])
 
     await callback.answer()
@@ -756,7 +829,7 @@ async def send_chat_stats_response(chat_id: int, lang: str, days: Optional[int],
             InlineKeyboardButton(text=f"{'✅ ' if not days else ''}{t('filter_all_time', lang)}", callback_data="stats_chat:all"),
             InlineKeyboardButton(text=f"{'✅ ' if days == 30 else ''}{t('filter_30_days', lang)}", callback_data="stats_chat:30")
         ],
-        [InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")]
+        [InlineKeyboardButton(text=t("btn_back_to_panel", lang), callback_data="admin_main_menu")]
     ])
 
     if isinstance(target_msg_or_cb, Message):
@@ -858,15 +931,19 @@ async def handle_admin_delete_book_menu(callback: CallbackQuery):
 
     books = await database.get_backlog_books_for_chat(DATABASE_PATH, chat_id)
     if not books:
-        await callback.answer(t("no_books_to_delete", lang), show_alert=True)
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t("btn_back_to_panel", lang), callback_data="admin_main_menu")]
+        ])
+        await callback.answer()
+        await callback.message.edit_text(t("no_books_to_delete", lang), parse_mode="Markdown", reply_markup=markup)
         return
 
     keyboard = []
     for b in books[:10]:
-        btn_text = f"❌ {b['title'][:25]} ({b['author'][:15]})"
+        btn_text = f"❌ {b['title'][:25]} — {b['author'][:15]}"
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"del_book:{b['id']}")])
 
-    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")])
+    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_panel", lang), callback_data="admin_main_menu")])
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
 
     await callback.answer()
@@ -892,8 +969,8 @@ async def handle_del_book_action(callback: CallbackQuery):
     else:
         await callback.answer("Error deleting book.", show_alert=True)
 
-    markup = get_admin_keyboard(lang)
-    await callback.message.edit_text(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
+    panel_text, markup = await get_admin_panel_view(chat_id, lang)
+    await callback.message.edit_text(panel_text, parse_mode="Markdown", reply_markup=markup)
 
 
 @router.callback_query(F.data == "admin_main_menu")
@@ -904,20 +981,30 @@ async def handle_admin_main_menu(callback: CallbackQuery):
         return
 
     await callback.answer()
-    markup = get_admin_keyboard(lang)
-    await callback.message.edit_text(t("admin_panel_title", lang), parse_mode="Markdown", reply_markup=markup)
+    panel_text, markup = await get_admin_panel_view(callback.message.chat.id, lang)
+    await callback.message.edit_text(panel_text, parse_mode="Markdown", reply_markup=markup)
 
 
 @router.message(Command("vote"))
 async def handle_vote_cmd(message: Message):
     await register_user_and_chat(message)
     lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+
+    if message.chat.type == ChatType.PRIVATE:
+        await message.answer(t("control_panel_dm_notice", lang))
+        return
+
     if not await is_admin(message.chat.id, message.from_user.id):
         await message.answer(t("only_admins_allowed", lang))
         return
 
     active_poll = await database.get_active_poll(DATABASE_PATH, message.chat.id)
     if active_poll:
+        await message.answer(t("vote_in_progress_err", lang))
+        return
+
+    current_book = await database.get_current_winning_or_reading_book(DATABASE_PATH, message.chat.id)
+    if current_book:
         await message.answer(t("vote_in_progress_err", lang))
         return
 
@@ -934,9 +1021,15 @@ async def handle_vote_cmd(message: Message):
 async def handle_finish_vote_cmd(message: Message):
     await register_user_and_chat(message)
     lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+
+    if message.chat.type == ChatType.PRIVATE:
+        await message.answer(t("control_panel_dm_notice", lang))
+        return
+
     if not await is_admin(message.chat.id, message.from_user.id):
         await message.answer(t("only_admins_allowed", lang))
         return
+
     await finish_vote_process(message.chat.id)
 
 
@@ -1121,14 +1214,14 @@ async def send_halloffame_response(chat_id: int, lang: str, target_msg_or_cb: An
     text = t("hof_header", lang)
     if qualified:
         for idx, item in enumerate(qualified, 1):
-            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], count=item["live_votes_count"]) + "\n"
     else:
         text += "—\n"
 
     if low_votes:
         text += t("hof_low_votes_header", lang, min_votes=MIN_VOTES_FOR_RATING)
         for idx, item in enumerate(low_votes, 1):
-            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], score=item["avg_score"], count=item["live_votes_count"]) + "\n"
+            text += t("hof_item_format", lang, idx=idx, title=item["title"], author=item["author"], wr=item["weighted_rating"], count=item["live_votes_count"]) + "\n"
 
     if isinstance(target_msg_or_cb, Message):
         await target_msg_or_cb.answer(text, parse_mode="Markdown", reply_markup=markup)
@@ -1153,7 +1246,7 @@ async def handle_hof_del_menu(callback: CallbackQuery):
 
     keyboard = []
     for b in all_hof_books:
-        btn_text = f"❌ {b['title'][:25]} ({b['author'][:15]})"
+        btn_text = f"❌ {b['title'][:25]} — {b['author'][:15]}"
         keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"hof_del_confirm:{b['id']}")])
 
     keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="hof_refresh")])
@@ -1213,7 +1306,6 @@ async def handle_hof_del_do(callback: CallbackQuery):
     await database.hide_book_from_hall_of_fame(DATABASE_PATH, book_id, chat_id)
     await callback.answer(t("hof_deleted_success", lang, title=book_title), show_alert=True)
 
-    # Automatically refresh Hall of Fame with recalculated Bayesian ratings
     await send_halloffame_response(chat_id, lang, target_msg_or_cb=callback, user_id=callback.from_user.id)
 
 
@@ -1234,7 +1326,6 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
     await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
     await callback.answer(t("added_to_hof_cb", lang))
 
-    # Construct rating keyboard (1-10 and Didn't read) using vote_book:{book_id}:{score}
     row1 = [InlineKeyboardButton(text=str(i), callback_data=f"vote_book:{book_id}:{i}") for i in range(1, 6)]
     row2 = [InlineKeyboardButton(text=str(i), callback_data=f"vote_book:{book_id}:{i}") for i in range(6, 11)]
     row3 = [InlineKeyboardButton(text=t("btn_did_not_read", lang), callback_data=f"vote_book:{book_id}:not_read")]
@@ -1274,12 +1365,10 @@ async def handle_vote_book_callback(callback: CallbackQuery):
         await database.save_read_rating(DATABASE_PATH, user_id, book_id, score=score)
         await callback.answer(t("saved_read_score_cb", lang, score=score), show_alert=True)
 
-    # Recalculate Hall of Fame average rating and votes count
     stats = await database.update_hall_of_fame_rating(DATABASE_PATH, book_id, chat_id)
     book = await database.get_book_by_id(DATABASE_PATH, book_id)
     book_title = book["title"] if book else f"#{book_id}"
 
-    # Visual feedback update
     feedback_text = t(
         "vote_feedback_msg",
         lang,
