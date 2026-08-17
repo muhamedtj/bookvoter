@@ -199,6 +199,14 @@ def get_download_lock(chat_id: int, book_id: int) -> asyncio.Lock:
         download_locks[key] = asyncio.Lock()
     return download_locks[key]
 
+# Chat-level locks for finishing vote to avoid race conditions
+finish_vote_locks: Dict[int, asyncio.Lock] = {}
+
+def get_finish_vote_lock(chat_id: int) -> asyncio.Lock:
+    if chat_id not in finish_vote_locks:
+        finish_vote_locks[chat_id] = asyncio.Lock()
+    return finish_vote_locks[chat_id]
+
 
 # --- Handlers ---
 
@@ -402,43 +410,12 @@ async def handle_suggestion_select(callback: CallbackQuery):
         await callback.message.edit_text(t("book_already_exists", lang), parse_mode="Markdown")
         return
 
-    # If genre is missing or empty, ask user to select a genre via inline buttons
-    if not selected_book.get("genre") or selected_book["genre"].strip().lower() in ["general", "без жанра", ""]:
-        # Save selection details in pending_genre_selections
-        genre_key = f"gen_{chat_id}_{user_id}_{int(datetime.now().timestamp())}"
-        pending_genre_selections[genre_key] = selected_book
-        pending_suggestions.pop(temp_key, None)
-
-        genre_markup = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text=t("genre_scifi", lang), callback_data=f"set_gen:{genre_key}:Sci-Fi"),
-                InlineKeyboardButton(text=t("genre_classics", lang), callback_data=f"set_gen:{genre_key}:Classics")
-            ],
-            [
-                InlineKeyboardButton(text=t("genre_business", lang), callback_data=f"set_gen:{genre_key}:Business"),
-                InlineKeyboardButton(text=t("genre_detective", lang), callback_data=f"set_gen:{genre_key}:Detective")
-            ],
-            [
-                InlineKeyboardButton(text=t("genre_nonfiction", lang), callback_data=f"set_gen:{genre_key}:Non-Fiction"),
-                InlineKeyboardButton(text=t("genre_other", lang), callback_data=f"set_gen:{genre_key}:General")
-            ]
-        ])
-
-        alert_msg = f"📖 {selected_book['title']}" if len(selected_book['title']) <= 40 else f"📖 {selected_book['title'][:37]}…"
-        await callback.answer(alert_msg, show_alert=True)
-        await callback.message.edit_text(
-            t("select_genre_prompt", lang, title=selected_book["title"], author=selected_book["author"]),
-            parse_mode="Markdown",
-            reply_markup=genre_markup
-        )
-        return
-
     book_id = await database.add_book(
         DATABASE_PATH,
         chat_id=chat_id,
         title=selected_book["title"],
         author=selected_book["author"],
-        genre=selected_book["genre"],
+        genre=None,
         suggested_by_tg_id=user_id,
         file_id=selected_book.get("download_cmd") or None
     )
@@ -460,53 +437,6 @@ async def handle_suggestion_select(callback: CallbackQuery):
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
 
 
-# Pending genre selections dictionary
-pending_genre_selections: Dict[str, Dict[str, str]] = {}
-
-
-@router.callback_query(F.data.startswith("set_gen:"))
-async def handle_set_genre_callback(callback: CallbackQuery):
-    await register_user_and_chat(callback.message)
-    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
-    parts = callback.data.split(":", 2)
-    if len(parts) != 3:
-        await callback.answer()
-        return
-
-    genre_key, chosen_genre = parts[1], parts[2]
-    selected_book = pending_genre_selections.get(genre_key)
-
-    if not selected_book:
-        await callback.answer(t("selection_expired", lang))
-        return
-
-    chat_id = callback.message.chat.id
-    user_id = callback.from_user.id
-
-    book_id = await database.add_book(
-        DATABASE_PATH,
-        chat_id=chat_id,
-        title=selected_book["title"],
-        author=selected_book["author"],
-        genre=chosen_genre,
-        suggested_by_tg_id=user_id,
-        file_id=selected_book.get("download_cmd") or None
-    )
-
-    pending_genre_selections.pop(genre_key, None)
-
-    bot_info = await bot.get_me()
-    rate_url = f"https://t.me/{bot_info.username}?start=rate_new"
-    rate_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_rate_backlog", lang), url=rate_url)]
-    ])
-
-    await callback.answer(t("book_saved_cb", lang))
-    text = (
-        t("book_added_confirmation_exact", lang, title=selected_book["title"], author=selected_book["author"]) + "\n\n" +
-        t("click_below_to_rate", lang)
-    )
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
 
 
 # Anti-Spam Rating in Private Messages
@@ -661,55 +591,25 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
         await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
 
+    active_reading = await database.get_current_winning_or_reading_book(DATABASE_PATH, chat_id)
+    if active_reading:
+        await callback.answer(t("active_reading_in_progress_err", lang, title=active_reading["title"]), show_alert=True)
+        return
+
     active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
     if active_poll:
         await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
         return
 
-    genres = await database.get_available_genres_in_backlog(DATABASE_PATH, chat_id)
-
-    keyboard = [
-        [InlineKeyboardButton(text=t("all_genres_btn", lang), callback_data="vote_genre:all")]
-    ]
-    for g in genres:
-        keyboard.append([InlineKeyboardButton(text=f"🏷️ {g[:30]}", callback_data=f"vote_genre:{g}")])
-
-    keyboard.append([InlineKeyboardButton(text=t("btn_back_to_menu", lang), callback_data="admin_main_menu")])
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-
-    await callback.answer()
-    await callback.message.edit_text(t("select_genre_for_vote", lang), parse_mode="Markdown", reply_markup=markup)
-
-
-@router.callback_query(F.data.startswith("vote_genre:"))
-async def handle_vote_genre_selected(callback: CallbackQuery):
-    chat_id = callback.message.chat.id
-    lang = await get_lang(chat_id, callback.from_user.id)
-    if not await is_admin(chat_id, callback.from_user.id):
-        await callback.answer(t("only_admins_allowed", lang), show_alert=True)
-        return
-
-    genre_param = callback.data.split(":", 1)[1]
-    excluded_note = ""
-
-    if genre_param.lower() == "all":
-        result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
-        books = result_dict["books"]
-        if result_dict.get("excluded_genre"):
-            excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
-    else:
-        all_genre_books = await database.get_backlog_books_by_genre(DATABASE_PATH, chat_id, genre_param)
-        books = all_genre_books[:3]
-
-    if not books:
+    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, chat_id, limit=3)
+    if not top_books:
         await callback.answer(t("no_backlog_books_err", lang), show_alert=True)
         return
 
     await callback.answer()
-    await launch_poll_for_books(chat_id, books, lang)
-
+    await launch_poll_for_books(chat_id, top_books, lang)
     await callback.message.edit_text(
-        t("vote_started_msg", lang) + excluded_note,
+        t("vote_started_msg", lang),
         parse_mode="Markdown"
     )
 
@@ -1002,18 +902,23 @@ async def handle_vote_cmd(message: Message):
         await message.answer(t("only_admins_allowed", lang))
         return
 
-    result_dict = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
-    top_books = result_dict["books"]
+    active_reading = await database.get_current_winning_or_reading_book(DATABASE_PATH, message.chat.id)
+    if active_reading:
+        await message.answer(t("active_reading_in_progress_err", lang, title=active_reading["title"]), parse_mode="Markdown")
+        return
+
+    active_poll = await database.get_active_poll(DATABASE_PATH, message.chat.id)
+    if active_poll:
+        await message.answer(t("vote_in_progress_err", lang), parse_mode="Markdown")
+        return
+
+    top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
     if not top_books:
         await message.answer(t("no_backlog_books_err", lang))
         return
 
-    excluded_note = ""
-    if result_dict.get("excluded_genre"):
-        excluded_note = t("rotation_note", lang, genre=result_dict["excluded_genre"])
-
     await launch_poll_for_books(message.chat.id, top_books, lang)
-    await message.answer(t("vote_started_msg", lang) + excluded_note, parse_mode="Markdown")
+    await message.answer(t("vote_started_msg", lang), parse_mode="Markdown")
 
 
 @router.message(Command("finish_vote"))
@@ -1027,61 +932,105 @@ async def handle_finish_vote_cmd(message: Message):
 
 
 async def finish_vote_process(chat_id: int):
-    lang = await database.get_effective_language(DATABASE_PATH, chat_id)
-    active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
-    if not active_poll:
-        await bot.send_message(chat_id, t("no_active_vote_err", lang))
+    lock = get_finish_vote_lock(chat_id)
+    if lock.locked():
+        logger.info(f"finish_vote_process already running for chat {chat_id}. Skipping duplicate call.")
         return
 
-    poll_message_id = active_poll["message_id"]
-    options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
-    voting_book_ids = list(options_mapping.values())
+    async with lock:
+        lang = await database.get_effective_language(DATABASE_PATH, chat_id)
+        active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
+        if not active_poll:
+            await bot.send_message(chat_id, t("no_active_vote_err", lang))
+            return
 
-    try:
-        stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
+        poll_message_id = active_poll["message_id"]
+        options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
+        voting_book_ids = list(options_mapping.values())
 
-        max_votes = -1
-        winning_option_idx = 0
-        for idx, option in enumerate(stopped_poll.options):
-            if option.voter_count > max_votes:
-                max_votes = option.voter_count
-                winning_option_idx = idx
+        total_voters = 0
+        winning_book_id = None
+        canceled_due_to_zero_votes = False
 
-        winning_book_id = options_mapping.get(winning_option_idx, voting_book_ids[0])
-    except Exception as e:
-        logger.error(f"Error stopping poll in chat {chat_id}: {e}")
-        winning_book_id = voting_book_ids[0]
+        try:
+            try:
+                stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
+                total_voters = stopped_poll.total_voter_count
 
-    await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
-    await database.clear_active_poll(DATABASE_PATH, chat_id)
+                if total_voters == 0:
+                    canceled_due_to_zero_votes = True
+                else:
+                    max_votes = -1
+                    candidate_indices = []
+                    for idx, option in enumerate(stopped_poll.options):
+                        if option.voter_count > max_votes:
+                            max_votes = option.voter_count
+                            candidate_indices = [idx]
+                        elif option.voter_count == max_votes:
+                            candidate_indices.append(idx)
 
-    winning_book = await database.get_book_by_id(DATABASE_PATH, winning_book_id)
-    if not winning_book:
-        await bot.send_message(chat_id, "Error retrieving winning book details.")
-        return
+                    if len(candidate_indices) == 1:
+                        winning_book_id = options_mapping.get(candidate_indices[0])
+                    else:
+                        # Tie-breaker: choose candidate book with highest backlog wish_score
+                        tied_book_ids = [options_mapping[idx] for idx in candidate_indices if idx in options_mapping]
+                        best_book_id = tied_book_ids[0]
+                        best_score = -1.0
 
-    win_title = winning_book["title"]
-    win_author = winning_book["author"]
-    win_file_id = winning_book.get("file_id")
+                        for b_id in tied_book_ids:
+                            book_info = await database.get_book_by_id(DATABASE_PATH, b_id)
+                            # Fetch wish_score from backlog_ratings
+                            full_info = await database.get_backlog_books_full_info(DATABASE_PATH, chat_id)
+                            score = 0.0
+                            for f in full_info:
+                                if f["id"] == b_id:
+                                    score = f["wish_score"]
+                                    break
+                            if score > best_score:
+                                best_score = score
+                                best_book_id = b_id
+                        winning_book_id = best_book_id
+            except Exception as e:
+                logger.error(f"Error stopping poll in chat {chat_id}: {e}")
+                # Fallback to first book if error occurs during stop_poll
+                winning_book_id = voting_book_ids[0] if voting_book_ids else None
 
-    await bot.send_message(
-        chat_id,
-        t("voting_ended_title", lang, title=win_title, author=win_author),
-        parse_mode="Markdown"
-    )
+            if canceled_due_to_zero_votes or not winning_book_id:
+                await database.update_books_status(DATABASE_PATH, voting_book_ids, "backlog")
+                await bot.send_message(chat_id, t("vote_canceled_no_votes", lang), parse_mode="Markdown")
+                return
 
-    # Determine exact search query / download command
-    invalid_authors = {"unknown author", "library bot", "n/a", "none", ""}
-    clean_author = win_author.strip() if win_author else ""
-    if clean_author.lower() in invalid_authors:
-        clean_author = ""
+            await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
 
-    if win_file_id and win_file_id.strip().startswith("/"):
-        query_str = win_file_id.strip()
-    else:
-        query_str = f"{win_title} {clean_author}".strip() if clean_author else win_title.strip()
+            winning_book = await database.get_book_by_id(DATABASE_PATH, winning_book_id)
+            if not winning_book:
+                await bot.send_message(chat_id, "Error retrieving winning book details.")
+                return
 
-    await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
+            win_title = winning_book["title"]
+            win_author = winning_book["author"]
+            win_file_id = winning_book.get("file_id")
+
+            await bot.send_message(
+                chat_id,
+                t("voting_ended_title", lang, title=win_title, author=win_author),
+                parse_mode="Markdown"
+            )
+
+            invalid_authors = {"unknown author", "library bot", "n/a", "none", ""}
+            clean_author = win_author.strip() if win_author else ""
+            if clean_author.lower() in invalid_authors:
+                clean_author = ""
+
+            if win_file_id and win_file_id.strip().startswith("/"):
+                query_str = win_file_id.strip()
+            else:
+                query_str = f"{win_title} {clean_author}".strip() if clean_author else win_title.strip()
+
+            await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
+
+        finally:
+            await database.clear_active_poll(DATABASE_PATH, chat_id)
 
 
 async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, query_str: str, lang: str):
@@ -1300,7 +1249,6 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("vote_book:"))
-@router.callback_query(F.data.startswith("rate_read:"))
 async def handle_vote_book_callback(callback: CallbackQuery):
     lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     parts = callback.data.split(":")

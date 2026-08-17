@@ -96,16 +96,36 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         audit_departed = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[])
         self.assertEqual(len(audit_departed), 2)
 
-    async def test_genre_rotation(self):
-        b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
-        await database.update_books_status(self.db_path, [b0_id], "won")
+    async def test_top_n_selection_ignores_genre_and_orders_by_wish_score(self):
+        # Verify that get_top_backlog_books_for_vote selects books strictly by wish_score
+        u_id = await database.get_or_create_user(self.db_path, tg_id=1001)
+        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Low Score Book", author="Author A")
+        b2_id = await database.add_book(self.db_path, chat_id=-100, title="High Score Book", author="Author B")
 
-        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Hyperion", author="Dan Simmons", genre="Sci-Fi")
-        b2_id = await database.add_book(self.db_path, chat_id=-100, title="Name of the Wind", author="Patrick Rothfuss", genre="Fantasy")
+        await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b1_id, score=3)
+        await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b2_id, score=9)
 
-        result = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=1)
-        self.assertEqual(result["books"][0]["id"], b2_id)
-        self.assertEqual(result["excluded_genre"], "Sci-Fi")
+        top_books = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=2)
+        self.assertEqual(len(top_books), 2)
+        self.assertEqual(top_books[0]["id"], b2_id)
+        self.assertEqual(top_books[1]["id"], b1_id)
+
+    async def test_duplicate_book_prevention(self):
+        await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert")
+        exists = await database.is_book_exists(self.db_path, chat_id=-100, title=" dune ", author="FRANK HERBERT")
+        self.assertTrue(exists)
+
+        exists_other_chat = await database.is_book_exists(self.db_path, chat_id=-999, title="Dune", author="Frank Herbert")
+        self.assertFalse(exists_other_chat)
+
+    async def test_finish_vote_locks(self):
+        lock1 = bot.get_finish_vote_lock(chat_id=-100)
+        lock2 = bot.get_finish_vote_lock(chat_id=-100)
+        self.assertIs(lock1, lock2)
+
+        async with lock1:
+            self.assertTrue(lock2.locked())
+        self.assertFalse(lock2.locked())
 
     async def test_superadmin_stats_detailed(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")

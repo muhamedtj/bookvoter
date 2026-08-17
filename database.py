@@ -203,7 +203,7 @@ async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optiona
     """
     Get effective language preference:
     If chat is private (chat_id > 0), user language is used.
-    If chat is group (chat_id < 0), chat language is used.
+    If chat is group (chat_id < 0), chat language is used, falling back to user language if set.
     Defaults to 'en' if not explicitly set.
     """
     if chat_id > 0:
@@ -213,6 +213,8 @@ async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optiona
         return lang if lang else "en"
     else:
         lang = await get_chat_language(db_path, chat_id)
+        if not lang and user_tg_id:
+            lang = await get_user_language(db_path, user_tg_id)
         return lang if lang else "en"
 
 
@@ -404,50 +406,25 @@ async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -
         return {"avg_rating": avg_rating, "votes_count": votes_count}
 
 
-async def get_last_read_genre(db_path: str, chat_id: int) -> Optional[str]:
-    """Get genre of the most recently finished/won book in the chat."""
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute("""
-            SELECT genre FROM books
-            WHERE chat_id = ? AND status IN ('won', 'done') AND genre IS NOT NULL AND TRIM(genre) != ''
-            ORDER BY id DESC LIMIT 1
-        """, (chat_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else None
-
-
-async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> Dict[str, Any]:
+async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
     """
-    Select top N backlog books based on average rating.
-    Excludes the genre of the previously read book if possible.
-    Returns dict containing 'books' list and 'excluded_genre' if applicable.
+    Select top N backlog candidate books based purely on average desire score (wish score).
     """
-    last_genre = await get_last_read_genre(db_path, chat_id)
-
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-
-        base_query = """
+        query = """
             SELECT b.id, b.chat_id, b.title, b.author, b.genre,
                    COALESCE(AVG(r.score), 0) as avg_score,
                    COUNT(r.score) as rating_count
             FROM books b
             LEFT JOIN backlog_ratings r ON b.id = r.book_id
             WHERE b.chat_id = ? AND b.status = 'backlog'
+            GROUP BY b.id
+            ORDER BY avg_score DESC, b.id ASC
+            LIMIT ?
         """
-
-        if last_genre:
-            query = base_query + " AND (b.genre IS NULL OR LOWER(b.genre) != LOWER(?)) GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
-            async with db.execute(query, (chat_id, last_genre, limit)) as cursor:
-                results = [dict(r) for r in await cursor.fetchall()]
-                if len(results) >= limit:
-                    return {"books": results, "excluded_genre": last_genre}
-
-        # If not enough books excluding last_genre, fetch all backlog books
-        query = base_query + " GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
         async with db.execute(query, (chat_id, limit)) as cursor:
-            results = [dict(r) for r in await cursor.fetchall()]
-            return {"books": results, "excluded_genre": None}
+            return [dict(r) for r in await cursor.fetchall()]
 
 
 async def update_books_status(db_path: str, book_ids: List[int], status: str) -> None:
@@ -590,12 +567,12 @@ async def get_hall_of_fame_detailed(db_path: str, chat_id: int, min_votes: int =
             if v > 0:
                 weighted_rating = (v / (v + m)) * avg_r + (m / (v + m)) * c
             else:
-                weighted_rating = c
+                weighted_rating = 0.0
 
             r["avg_score"] = round(avg_r, 2)
             r["weighted_rating"] = round(weighted_rating, 2)
 
-            if r["live_votes_count"] >= min_votes:
+            if r["live_votes_count"] >= min_votes and v > 0:
                 qualified.append(r)
             else:
                 low_votes.append(r)
