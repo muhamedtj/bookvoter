@@ -275,6 +275,20 @@ async def handle_start(message: Message, command: CommandObject):
     await message.answer(t("welcome_msg", lang), parse_mode="Markdown", reply_markup=welcome_markup)
 
 
+@router.message(Command("help"))
+async def handle_help_command(message: Message):
+    await register_user_and_chat(message)
+    lang = await get_lang(message.chat.id, message.from_user.id if message.from_user else None)
+    await message.answer(t("help_msg", lang), parse_mode="Markdown")
+
+
+@router.callback_query(F.data == "show_help")
+async def handle_show_help_cb(callback: CallbackQuery):
+    lang = await get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    await callback.message.answer(t("help_msg", lang), parse_mode="Markdown")
+
+
 @router.callback_query(F.data == "report_error")
 async def handle_report_error_cb(callback: CallbackQuery):
     lang = await get_lang(callback.message.chat.id, callback.from_user.id)
