@@ -23,7 +23,6 @@ OWN_GROUP_COMMANDS = {
 
 _installed = False
 _bot_username: Optional[str] = None
-_original_command_cleanup_call = None
 _original_send_or_replace_group_ui = None
 _original_message_answer = None
 _original_message_edit_text = None
@@ -88,23 +87,23 @@ async def _collision_safe_cleanup_call(self, handler, event, data):
     finally:
         text = getattr(event, "text", None) or ""
         chat = getattr(event, "chat", None)
-        if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
-            return
-
-        command, target = _command_parts(text)
-        if command not in OWN_GROUP_COMMANDS:
-            return
-        if target and target != await _own_username():
-            return
-
-        deleted = await ux.safe_delete_message(chat.id, event.message_id)
-        if not deleted and not await has_delete_permission(chat.id):
-            core.logger.warning(
-                "BookVoter could not clean command %s in chat %s: grant the bot "
-                "administrator permission 'Delete messages'.",
-                command,
-                chat.id,
-            )
+        should_check = bool(
+            chat
+            and chat.type in (core.ChatType.GROUP, core.ChatType.SUPERGROUP)
+            and text.lstrip().startswith("/")
+        )
+        if should_check:
+            command, target = _command_parts(text)
+            own_target = not target or target == await _own_username()
+            if command in OWN_GROUP_COMMANDS and own_target:
+                deleted = await ux.safe_delete_message(chat.id, event.message_id)
+                if not deleted and not await has_delete_permission(chat.id):
+                    core.logger.warning(
+                        "BookVoter could not clean command %s in chat %s: grant the bot "
+                        "administrator permission 'Delete messages'.",
+                        command,
+                        chat.id,
+                    )
 
 
 async def _send_or_replace_group_ui_with_ttl(message, text: str, parse_mode="HTML", reply_markup=None):
@@ -160,7 +159,6 @@ async def _admin_panel_with_cleanup_status(chat_id: int, lang: str, db_path: str
 
 def install() -> None:
     global _installed
-    global _original_command_cleanup_call
     global _original_send_or_replace_group_ui
     global _original_message_answer
     global _original_message_edit_text
@@ -174,7 +172,6 @@ def install() -> None:
     # The middleware instance is already registered by runtime_ux. Python looks
     # up __call__ on its class at runtime, so patching the class fixes that
     # existing instance without registering a second competing middleware.
-    _original_command_cleanup_call = ux._CommandCleanupMiddleware.__call__
     ux._CommandCleanupMiddleware.__call__ = _collision_safe_cleanup_call
 
     _original_send_or_replace_group_ui = core.send_or_replace_group_ui
