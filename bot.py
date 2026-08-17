@@ -14,12 +14,14 @@ import runtime_library
 import runtime_reporting
 import runtime_voting
 import runtime_menu
+import runtime_entry
 
 runtime_ux.install()
 runtime_library.install()
 runtime_reporting.install()
 runtime_voting.install()
 runtime_menu.install()
+runtime_entry.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
