@@ -461,7 +461,8 @@ async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -
 async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
     """
     Select top N backlog books based on average interest score from backlog_ratings.
-    Ordered by avg_score DESC, b.id ASC.
+    Ordered by avg_score DESC, b.id ASC. The returned title is prefixed with the
+    List of Waiting interest score for direct display in Telegram poll options.
     """
     async with open_db(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -477,7 +478,12 @@ async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int 
             LIMIT ?
         """
         async with db.execute(query, (chat_id, limit)) as cursor:
-            return [dict(r) for r in await cursor.fetchall()]
+            rows = [dict(r) for r in await cursor.fetchall()]
+            for item in rows:
+                raw_title = item["title"]
+                item["raw_title"] = raw_title
+                item["title"] = f"⭐ {float(item['avg_score']):.1f}/10 · {raw_title}"
+            return rows
 
 
 async def get_interest_scores_for_books(db_path: str, book_ids: List[int]) -> Dict[int, float]:
