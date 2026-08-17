@@ -275,6 +275,14 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "🏆 **Next book selected**\n\n**{title}** — {author}",
         "ru": "🏆 **Выбрана следующая книга**\n\n**{title}** — {author}"
     },
+    "active_reading_in_progress_err": {
+        "en": "⚠️ Cannot start a new vote while **{title}** is currently being read! Finish reading it first.",
+        "ru": "⚠️ Нельзя начать новое голосование, пока читается книга **{title}**! Сначала завершите её чтение."
+    },
+    "vote_canceled_no_votes": {
+        "en": "⚠️ Vote ended with 0 votes! Voting has been canceled and books reverted to backlog.",
+        "ru": "⚠️ Никто не проголосовал! Голосование отменено, книги возвращены в бэклог."
+    },
     "book_file_caption": {
         "en": "📚 Here is your book: **{title}**",
         "ru": "📚 Ваша книга: **{title}**"

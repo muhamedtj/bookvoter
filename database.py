@@ -203,7 +203,7 @@ async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optiona
     """
     Get effective language preference:
     If chat is private (chat_id > 0), user language is used.
-    If chat is group (chat_id < 0), chat language is used.
+    If chat is group (chat_id < 0), chat language is used, falling back to user language if set.
     Defaults to 'en' if not explicitly set.
     """
     if chat_id > 0:
@@ -213,6 +213,8 @@ async def get_effective_language(db_path: str, chat_id: int, user_tg_id: Optiona
         return lang if lang else "en"
     else:
         lang = await get_chat_language(db_path, chat_id)
+        if not lang and user_tg_id:
+            lang = await get_user_language(db_path, user_tg_id)
         return lang if lang else "en"
 
 
@@ -370,7 +372,9 @@ async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -
 
 async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
     """
-    Select top N backlog books based on average interest score from backlog_ratings.
+    Select top N backlog books based purely on average interest score
+    from backlog_ratings.
+
     Ordered by avg_score DESC, b.id ASC.
     """
     async with aiosqlite.connect(db_path) as db:
@@ -530,12 +534,12 @@ async def get_hall_of_fame_detailed(db_path: str, chat_id: int, min_votes: int =
             if v > 0:
                 weighted_rating = (v / (v + m)) * avg_r + (m / (v + m)) * c
             else:
-                weighted_rating = c
+                weighted_rating = 0.0
 
             r["avg_score"] = round(avg_r, 2)
             r["weighted_rating"] = round(weighted_rating, 2)
 
-            if r["live_votes_count"] >= min_votes:
+            if r["live_votes_count"] >= min_votes and v > 0:
                 qualified.append(r)
             else:
                 low_votes.append(r)

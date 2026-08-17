@@ -223,39 +223,158 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         audit_departed = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[])
         self.assertEqual(len(audit_departed), 2)
 
-    async def test_top_backlog_books_selection_logic(self):
-        b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
-        await database.update_books_status(self.db_path, [b0_id], "won")
+async def test_top_backlog_books_selection_logic(self):
+    # Previously selected/read book must not affect TOP-N selection by genre
+    b0_id = await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="Foundation",
+        author="Isaac Asimov",
+        genre="Sci-Fi"
+    )
+    await database.update_books_status(
+        self.db_path,
+        [b0_id],
+        "won"
+    )
 
-        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Hyperion", author="Dan Simmons", genre="Sci-Fi")
-        b2_id = await database.add_book(self.db_path, chat_id=-100, title="Name of the Wind", author="Patrick Rothfuss", genre="Fantasy")
-        b3_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi")
-        b4_id = await database.add_book(self.db_path, chat_id=-100, title="1984", author="George Orwell", genre=None)
+    # Backlog candidates with different genres
+    b1_id = await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="Hyperion",
+        author="Dan Simmons",
+        genre="Sci-Fi"
+    )
+    b2_id = await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="Name of the Wind",
+        author="Patrick Rothfuss",
+        genre="Fantasy"
+    )
+    b3_id = await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="Dune",
+        author="Frank Herbert",
+        genre="Sci-Fi"
+    )
+    b4_id = await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="1984",
+        author="George Orwell",
+        genre=None
+    )
 
-        u1 = await database.get_or_create_user(self.db_path, tg_id=101, username="user1")
-        u2 = await database.get_or_create_user(self.db_path, tg_id=102, username="user2")
+    await database.get_or_create_user(
+        self.db_path,
+        tg_id=101,
+        username="user1"
+    )
+    await database.get_or_create_user(
+        self.db_path,
+        tg_id=102,
+        username="user2"
+    )
 
-        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b1_id, score=10)
-        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b1_id, score=8)
+    # b1 average = 9
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=101,
+        book_id=b1_id,
+        score=10
+    )
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=102,
+        book_id=b1_id,
+        score=8
+    )
 
-        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b2_id, score=8)
-        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b2_id, score=8)
+    # b2 average = 8
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=101,
+        book_id=b2_id,
+        score=8
+    )
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=102,
+        book_id=b2_id,
+        score=8
+    )
 
-        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b3_id, score=8)
-        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b3_id, score=8)
+    # b3 average = 8
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=101,
+        book_id=b3_id,
+        score=8
+    )
+    await database.save_backlog_rating(
+        self.db_path,
+        tg_id=102,
+        book_id=b3_id,
+        score=8
+    )
 
-        top_books = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=3)
-        self.assertEqual(len(top_books), 3)
+    top_books = await database.get_top_backlog_books_for_vote(
+        self.db_path,
+        chat_id=-100,
+        limit=3
+    )
 
-        self.assertEqual(top_books[0]["id"], b1_id)
-        self.assertEqual(top_books[0]["avg_score"], 9.0)
+    self.assertEqual(len(top_books), 3)
 
-        self.assertEqual(top_books[1]["id"], b2_id)
-        self.assertEqual(top_books[2]["id"], b3_id)
+    # Highest average interest goes first
+    self.assertEqual(top_books[0]["id"], b1_id)
+    self.assertEqual(top_books[0]["avg_score"], 9.0)
 
-        all_top = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=4)
-        self.assertEqual(all_top[3]["id"], b4_id)
-        self.assertEqual(all_top[3]["avg_score"], 0.0)
+    # Equal scores use stable b.id ASC tie-break
+    self.assertEqual(top_books[1]["id"], b2_id)
+    self.assertEqual(top_books[2]["id"], b3_id)
+
+    # Genre of previously selected book does not exclude Sci-Fi books
+    self.assertIn(b1_id, [book["id"] for book in top_books])
+    self.assertIn(b3_id, [book["id"] for book in top_books])
+
+    # Unrated book is included last with score 0
+    all_top = await database.get_top_backlog_books_for_vote(
+        self.db_path,
+        chat_id=-100,
+        limit=4
+    )
+
+    self.assertEqual(all_top[3]["id"], b4_id)
+    self.assertEqual(all_top[3]["avg_score"], 0.0)
+
+
+async def test_duplicate_book_prevention(self):
+    await database.add_book(
+        self.db_path,
+        chat_id=-100,
+        title="Dune",
+        author="Frank Herbert"
+    )
+
+    exists = await database.is_book_exists(
+        self.db_path,
+        chat_id=-100,
+        title=" dune ",
+        author="FRANK HERBERT"
+    )
+    self.assertTrue(exists)
+
+    exists_other_chat = await database.is_book_exists(
+        self.db_path,
+        chat_id=-999,
+        title="Dune",
+        author="Frank Herbert"
+    )
+    self.assertFalse(exists_other_chat)
 
     async def test_superadmin_stats_detailed(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")

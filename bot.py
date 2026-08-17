@@ -225,6 +225,9 @@ def get_download_lock(chat_id: int, book_id: int) -> asyncio.Lock:
         download_locks[key] = asyncio.Lock()
     return download_locks[key]
 
+# Chat-level locks for finishing vote to avoid race conditions
+finish_vote_locks: Dict[int, asyncio.Lock] = {}
+
 def get_finish_vote_lock(chat_id: int) -> asyncio.Lock:
     if chat_id not in finish_vote_locks:
         finish_vote_locks[chat_id] = asyncio.Lock()
@@ -531,7 +534,7 @@ async def handle_suggestion_select(callback: CallbackQuery):
     )
     await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=rate_markup)
 
-
+ feat/bookvoter-telegram-bot-1878892981235505973
 # Anti-Spam Rating in Private Messages
 async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any, lang: str):
     unrated_books = await database.get_unrated_backlog_books_for_user(DATABASE_PATH, user_tg_id)
@@ -676,6 +679,11 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
         await callback.answer(t("only_admins_allowed", lang), show_alert=True)
         return
 
+    active_reading = await database.get_current_winning_or_reading_book(DATABASE_PATH, chat_id)
+    if active_reading:
+        await callback.answer(t("active_reading_in_progress_err", lang, title=active_reading["title"]), show_alert=True)
+        return
+
     active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
     if active_poll:
         await callback.answer(t("vote_in_progress_err", lang), show_alert=True)
@@ -693,7 +701,6 @@ async def handle_admin_start_vote_menu(callback: CallbackQuery):
 
     await callback.answer()
     await launch_poll_for_books(chat_id, top_books, lang)
-
     await callback.message.edit_text(
         t("vote_started_msg", lang),
         parse_mode="Markdown"
@@ -998,14 +1005,31 @@ async def handle_vote_cmd(message: Message):
         await message.answer(t("only_admins_allowed", lang))
         return
 
-    active_poll = await database.get_active_poll(DATABASE_PATH, message.chat.id)
-    if active_poll:
-        await message.answer(t("vote_in_progress_err", lang))
-        return
+active_poll = await database.get_active_poll(
+    DATABASE_PATH,
+    message.chat.id
+)
+if active_poll:
+    await message.answer(
+        t("vote_in_progress_err", lang),
+        parse_mode="Markdown"
+    )
+    return
 
-    current_book = await database.get_current_winning_or_reading_book(DATABASE_PATH, message.chat.id)
-    if current_book:
-        await message.answer(t("vote_in_progress_err", lang))
+current_book = await database.get_current_winning_or_reading_book(
+    DATABASE_PATH,
+    message.chat.id
+)
+if current_book:
+    await message.answer(
+        t(
+            "active_reading_in_progress_err",
+            lang,
+            title=current_book["title"]
+        ),
+        parse_mode="Markdown"
+    )
+    return
         return
 
     top_books = await database.get_top_backlog_books_for_vote(DATABASE_PATH, message.chat.id, limit=3)
@@ -1045,48 +1069,149 @@ async def finish_vote_process(chat_id: int):
         if not active_poll:
             await bot.send_message(chat_id, t("no_active_vote_err", lang))
             return
+poll_message_id = active_poll["message_id"]
+options_mapping: Dict[int, int] = {
+    int(k): v
+    for k, v in json.loads(active_poll["options_json"]).items()
+}
+voting_book_ids = list(options_mapping.values())
 
-        poll_message_id = active_poll["message_id"]
-        options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
-        voting_book_ids = list(options_mapping.values())
+total_voters = 0
+winning_book_id = None
+canceled_due_to_zero_votes = False
 
-        try:
-            stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
+try:
+    try:
+        stopped_poll: Poll = await bot.stop_poll(
+            chat_id,
+            poll_message_id
+        )
+        total_voters = stopped_poll.total_voter_count
 
+        if total_voters == 0:
+            canceled_due_to_zero_votes = True
+        else:
             max_votes = -1
-            winning_option_idx = 0
+            candidate_indices = []
+
             for idx, option in enumerate(stopped_poll.options):
                 if option.voter_count > max_votes:
                     max_votes = option.voter_count
-                    winning_option_idx = idx
+                    candidate_indices = [idx]
+                elif option.voter_count == max_votes:
+                    candidate_indices.append(idx)
 
-            winning_book_id = options_mapping.get(winning_option_idx, voting_book_ids[0])
-        except Exception as e:
-            logger.error(f"Error stopping poll in chat {chat_id}: {e}")
-            winning_book_id = voting_book_ids[0]
+            if len(candidate_indices) == 1:
+                winning_book_id = options_mapping.get(
+                    candidate_indices[0]
+                )
+            else:
+                # Tie-breaker:
+                # choose tied book with highest backlog interest score
+                tied_book_ids = [
+                    options_mapping[idx]
+                    for idx in candidate_indices
+                    if idx in options_mapping
+                ]
 
-        await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
-        await database.clear_active_poll(DATABASE_PATH, chat_id)
+                full_info = await database.get_backlog_books_full_info(
+                    DATABASE_PATH,
+                    chat_id
+                )
 
-        winning_book = await database.get_book_by_id(DATABASE_PATH, winning_book_id)
-        if not winning_book:
-            await bot.send_message(chat_id, "Error retrieving winning book details.")
-            return
+                scores_by_id = {
+                    book["id"]: book.get("wish_score", 0.0)
+                    for book in full_info
+                }
 
-        win_title = winning_book["title"]
-        win_author = winning_book["author"]
-        win_file_id = winning_book.get("file_id")
+                winning_book_id = max(
+                    tied_book_ids,
+                    key=lambda book_id: (
+                        scores_by_id.get(book_id, 0.0),
+                        -book_id
+                    )
+                )
+
+    except Exception as e:
+        logger.error(
+            f"Error stopping poll in chat {chat_id}: {e}"
+        )
+
+        # Preserve existing fallback behavior for now
+        winning_book_id = (
+            voting_book_ids[0]
+            if voting_book_ids
+            else None
+        )
+
+    # No one voted: cancel vote and return books to backlog
+    if canceled_due_to_zero_votes or not winning_book_id:
+        await database.update_books_status(
+            DATABASE_PATH,
+            voting_book_ids,
+            "backlog"
+        )
 
         await bot.send_message(
             chat_id,
-            t("voting_ended_title", lang, title=win_title, author=win_author),
+            t("vote_canceled_no_votes", lang),
             parse_mode="Markdown"
         )
+        return
 
-        # Offload book downloading to background task so update handler completes immediately
-        asyncio.create_task(
-            execute_downloader_and_send(chat_id, winning_book_id, win_title, win_author, win_file_id, lang)
+    # Resolve winner before starting downloader
+    await database.resolve_vote_winner(
+        DATABASE_PATH,
+        chat_id,
+        winning_book_id,
+        voting_book_ids
+    )
+
+    winning_book = await database.get_book_by_id(
+        DATABASE_PATH,
+        winning_book_id
+    )
+
+    if not winning_book:
+        await bot.send_message(
+            chat_id,
+            "Error retrieving winning book details."
         )
+        return
+
+    win_title = winning_book["title"]
+    win_author = winning_book["author"]
+    win_file_id = winning_book.get("file_id")
+
+    await bot.send_message(
+        chat_id,
+        t(
+            "voting_ended_title",
+            lang,
+            title=win_title,
+            author=win_author
+        ),
+        parse_mode="Markdown"
+    )
+
+    # Download/send in background so Telegram update handler
+    # is not blocked for 30+ seconds
+    asyncio.create_task(
+        execute_downloader_and_send(
+            chat_id,
+            winning_book_id,
+            win_title,
+            win_author,
+            win_file_id,
+            lang
+        )
+    )
+
+finally:
+    await database.clear_active_poll(
+        DATABASE_PATH,
+        chat_id
+    )
 
 
 async def execute_downloader_and_send(
@@ -1343,7 +1468,6 @@ async def handle_admin_finish_reading(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("vote_book:"))
-@router.callback_query(F.data.startswith("rate_read:"))
 async def handle_vote_book_callback(callback: CallbackQuery):
     lang = await get_lang(callback.message.chat.id, callback.from_user.id)
     parts = callback.data.split(":")
