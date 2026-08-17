@@ -99,45 +99,53 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "✅ Book **{title}** (**{author}**) successfully added to backlog!",
         "ru": "✅ Книга **{title}** (**{author}**) успешно добавлена в бэклог!"
     },
-    "select_genre_prompt": {
-        "en": "🏷️ Please select a genre for **{title}** ({author}):",
-        "ru": "🏷️ Пожалуйста, выберите жанр для книги **{title}** ({author}):"
+    "btn_how_it_works": {
+        "en": "ℹ️ How it works",
+        "ru": "ℹ️ Как работает бот"
     },
-    "genre_scifi": {
-        "en": "🚀 Sci-Fi / Fantasy",
-        "ru": "🚀 Фантастика / Фэнтези"
-    },
-    "genre_classics": {
-        "en": "🏛️ Classics",
-        "ru": "🏛️ Классика"
-    },
-    "genre_business": {
-        "en": "💼 Business / Economics",
-        "ru": "💼 Бизнес / Экономика"
-    },
-    "genre_detective": {
-        "en": "🔍 Detective / Thriller",
-        "ru": "🔍 Детектив / Триллер"
-    },
-    "genre_nonfiction": {
-        "en": "🧠 Non-Fiction / Science",
-        "ru": "🧠 Научпоп / Нон-фикшн"
-    },
-    "genre_other": {
-        "en": "📚 Other / General",
-        "ru": "📚 Прочее / Другое"
-    },
-    "book_field_title": {
-        "en": "📖 **Title:** {title}",
-        "ru": "📖 **Название:** {title}"
-    },
-    "book_field_author": {
-        "en": "✍️ **Author:** {author}",
-        "ru": "✍️ **Автор:** {author}"
-    },
-    "book_field_genre": {
-        "en": "🏷️ **Genre:** {genre}",
-        "ru": "🏷️ **Жанр:** {genre}"
+    "help_msg": {
+        "en": (
+            "ℹ️ **How BookVoter Works**\n\n"
+            "1. **Suggest a book**\n"
+            "   In the group chat, type:\n"
+            "   `/suggest Book Title`\n\n"
+            "2. **Select the matching edition**\n"
+            "   The bot will display search results. Tap the right book to add it to the club's backlog.\n\n"
+            "3. **Rate your interest**\n"
+            "   Open a private chat with the bot and rate books from 1 to 10.\n"
+            "   The higher your score, the more you want to read the book.\n"
+            "   Your interest ratings remain private to you.\n\n"
+            "4. **Vote for the next book**\n"
+            "   Books with the highest interest ratings enter the next vote.\n"
+            "   An administrator starts the vote, and members choose the next book for the club.\n"
+            "   Voting lasts up to 24 hours and may end earlier if one book receives more than 50% of the votes.\n\n"
+            "5. **Read and rate**\n"
+            "   After the vote, the bot delivers the book file to the group.\n"
+            "   When the club finishes reading, rate the book from 1 to 10 — or mark that you didn't read it.\n\n"
+            "🏆 Read books enter the **Hall of Fame** with the club's final score.\n\n"
+            "If you notice an issue, tap \"Report an error\"."
+        ),
+        "ru": (
+            "ℹ️ **Как работает BookVoter**\n\n"
+            "1. **Предложите книгу**\n"
+            "   В группе напишите:\n"
+            "   `/suggest Название книги`\n\n"
+            "2. **Выберите подходящее издание**\n"
+            "   Бот покажет найденные варианты. Нажмите на нужную книгу — она попадёт в общий список клуба.\n\n"
+            "3. **Оцените интерес к книгам**\n"
+            "   Перейдите в личные сообщения с ботом и поставьте книгам оценку от 1 до 10.\n"
+            "   Чем выше ваша оценка, тем сильнее вы хотите прочитать книгу.\n"
+            "   Ваши оценки интереса видите только вы.\n\n"
+            "4. **Голосуйте за следующую книгу**\n"
+            "   Книги с самыми высокими оценками интереса попадают в следующее голосование.\n"
+            "   Администратор запускает голосование, и участники выбирают следующую книгу клуба.\n"
+            "   Голосование длится до 24 часов и может завершиться раньше, если одна книга получит больше половины голосов.\n\n"
+            "5. **Читайте и оценивайте**\n"
+            "   После выбора бот отправит книгу в группу.\n"
+            "   Когда клуб закончит чтение, поставьте книге итоговую оценку от 1 до 10 — или отметьте, что не читали её.\n\n"
+            "🏆 Прочитанные книги попадают в **Зал славы** клуба с итоговой оценкой.\n\n"
+            "Если заметили проблему, нажмите «Сообщить об ошибке»."
+        )
     },
     "click_below_to_rate": {
         "en": "Click below to rate unrated books in private messages!",
@@ -152,8 +160,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "🎉 **Всё оценено!** Вы оценили все доступные книги из бэклога ваших групп."
     },
     "rate_prompt_group": {
-        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n🏷️ **Genre:** {genre}\n\nHow strongly do you want to read this book (from 1 to 10)?",
-        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n🏷️ **Жанр:** {genre}\n\nНасколько сильно вы хотите читать эту книгу (от 1 до 10)?"
+        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n\nHow strongly do you want to read this book (from 1 to 10)?",
+        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n\nНасколько сильно вы хотите читать эту книгу (от 1 до 10)?"
     },
     "saved_score_cb": {
         "en": "Saved score: {score}/10",
@@ -167,10 +175,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "📜 Backlog is currently empty. Add books using `/suggest`!",
         "ru": "📜 Бэклог пока пуст. Добавьте книги с помощью `/suggest`!"
     },
-    "rotation_note": {
-        "en": "\n\n_(Note: Books in genre '{genre}' excluded due to genre rotation rule)_",
-        "ru": "\n\n_(Примечание: книги жанра '{genre}' были исключены из топ-выбора из-за правила ротации жанров)_"
-    },
     "only_admins_allowed": {
         "en": "⚠️ Only group administrators can perform this action.",
         "ru": "⚠️ Только администраторы группы могут выполнять это действие."
@@ -178,18 +182,6 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "admin_panel_title": {
         "en": "⚙️ **BookVoter Control Panel**",
         "ru": "⚙️ **Панель управления BookVoter**"
-    },
-    "select_genre_for_vote": {
-        "en": "🏷️ **Filter Backlog by Genre for Voting:**\nSelect a genre or view all books sorted by desire rating:",
-        "ru": "🏷️ **Фильтр бэклога по жанрам для голосования:**\nВыберите жанр или просмотрите все книги, отсортированные по рейтингу желания читать:"
-    },
-    "all_genres_btn": {
-        "en": "🌐 All Genres",
-        "ru": "🌐 Все жанры"
-    },
-    "books_in_genre_title": {
-        "en": "📚 **Top Books for Voting ({genre}):**\nSorted by average club rating:",
-        "ru": "📚 **Топ книг для голосования ({genre}):**\nОтсортировано по среднему рейтингу клуба:"
     },
     "btn_start_vote": {
         "en": "🎲 Start Next Book Vote",
@@ -308,8 +300,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Чтение завершено! Опрос оценки книги отправлен в чат."
     },
     "finish_reading_card_title": {
-        "en": "📖 **Reading Completed!**\n\nBook: **{title}** ({author})\nGenre: **{genre}**\n\nPlease rate this book after reading:",
-        "ru": "📖 **Чтение книги завершено!**\n\nКнига: **{title}** ({author})\nЖанр: **{genre}**\n\nПожалуйста, оцените прочитанную книгу:"
+        "en": "📖 **Reading Completed!**\n\nBook: **{title}** ({author})\n\nPlease rate this book after reading:",
+        "ru": "📖 **Чтение книги завершено!**\n\nКнига: **{title}** ({author})\n\nПожалуйста, оцените прочитанную книгу:"
     },
     "btn_did_not_read": {
         "en": "🙈 Didn't read",
@@ -395,16 +387,14 @@ STRINGS: Dict[str, Dict[str, str]] = {
             "• Total Active Groups: **{total_active_chats}**\n"
             "• Total Unique Voters: **{total_voters}**\n"
             "• Total Suggested Books: **{total_books_suggested}**\n\n"
-            "🔥 **Top Books by Wish Score:**\n{top_books_str}\n\n"
-            "🏷️ **Top Genres:**\n{top_genres_str}"
+            "🔥 **Top Books by Wish Score:**\n{top_books_str}"
         ),
         "ru": (
             "🌐 **Глобальная панель супер-админа ({filter_label})**\n\n"
             "• Всего активных групп: **{total_active_chats}**\n"
             "• Уникальных проголосовавших: **{total_voters}**\n"
             "• Всего предложено книг: **{total_books_suggested}**\n\n"
-            "🔥 **Топ книг по рейтингу желания:**\n{top_books_str}\n\n"
-            "🏷️ **Самые популярные жанры:**\n{top_genres_str}"
+            "🔥 **Топ книг по рейтингу желания:**\n{top_books_str}"
         )
     }
 }
