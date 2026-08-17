@@ -75,11 +75,11 @@ async def notify_superadmin_error(
     chat_id: Optional[int] = None,
     context_info: str = "",
 ):
-    """Deliver diagnostics to configured superadmins, with a safe group-admin fallback.
+    """Deliver diagnostics to configured superadmins.
 
-    Telegram bots cannot DM arbitrary users who never opened the bot.  If the
-    configured SUPER_ADMIN_IDS are missing or delivery fails, a report triggered
-    from a club group is therefore also attempted via that group's administrators.
+    Manual reports have a group-admin DM fallback so the button remains useful
+    even when SUPER_ADMIN_IDS is not configured yet. Internal tracebacks never
+    use that fallback and therefore are not exposed to club administrators.
     """
     report = (
         f"🚨 <b>Critical Error Report</b>\n\n"
@@ -102,9 +102,11 @@ async def notify_superadmin_error(
         except Exception as exc:
             _core.logger.error(f"Failed to send error report to superadmin {admin_id}: {exc}")
 
-    # Fallback for manual reports/errors originating in a club group.  This makes
-    # the feature useful even before SUPER_ADMIN_IDS is configured correctly.
-    if not delivered and chat_id is not None and chat_id < 0:
+    is_manual_report = error_title.startswith("User Error Report")
+
+    # Fallback only for an explicit user-initiated report. This avoids exposing
+    # internal exception tracebacks to administrators of tenant groups.
+    if not delivered and is_manual_report and chat_id is not None and chat_id < 0:
         try:
             administrators = await _core.bot.get_chat_administrators(chat_id)
         except Exception as exc:
