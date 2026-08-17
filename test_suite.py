@@ -204,8 +204,8 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
 
     async def test_books_ratings_and_backlog_full(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=1001, username="alice", full_name="Alice Smith")
-        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi", suggested_by_tg_id=1001)
-        b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre="Fantasy", suggested_by_tg_id=1001)
+        b1_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre=None, suggested_by_tg_id=1001)
+        b2_id = await database.add_book(self.db_path, chat_id=-100, title="The Hobbit", author="J.R.R. Tolkien", genre=None, suggested_by_tg_id=1001)
 
         full_backlog = await database.get_backlog_books_full_info(self.db_path, chat_id=-100)
         self.assertEqual(len(full_backlog), 2)
@@ -253,26 +253,46 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(top_books[1]["id"], b2_id)
         self.assertEqual(top_books[2]["id"], b3_id)
 
-        all_top = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=4)
-        self.assertEqual(all_top[3]["id"], b4_id)
-        self.assertEqual(all_top[3]["avg_score"], 0.0)
+         # Rate b1 higher than b2
+  await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b1_id, score=9)
+  await database.save_backlog_rating(self.db_path, tg_id=1001, book_id=b2_id, score=7)
 
+  # Verify ranking is based on interest score only
+  result = await database.get_top_backlog_books_for_vote(
+      self.db_path,
+      chat_id=-100,
+      limit=2
+  )
+  self.assertEqual(len(result), 2)
+  self.assertEqual(result[0]["id"], b1_id)
+  self.assertEqual(result[1]["id"], b2_id)
+
+  # Check limit=4 to verify zero-rating book included last
+  all_top = await database.get_top_backlog_books_for_vote(
+      self.db_path,
+      chat_id=-100,
+      limit=4
+  )
+  self.assertEqual(all_top[3]["id"], b4_id)
+  self.assertEqual(all_top[3]["avg_score"], 0.0)  
+  
     async def test_superadmin_stats_detailed(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")
-        b_id = await database.add_book(self.db_path, chat_id=-200, title="1984", author="George Orwell", genre="Dystopia", suggested_by_tg_id=2001)
+        b_id = await database.add_book(self.db_path, chat_id=-200, title="1984", author="George Orwell", genre=None, suggested_by_tg_id=2001)
         await database.save_backlog_rating(self.db_path, tg_id=2001, book_id=b_id, score=10)
 
         sa_stats = await database.get_superadmin_stats_detailed(self.db_path, days=30)
         self.assertIn("total_voters", sa_stats)
         self.assertEqual(sa_stats["total_voters"], 1)
         self.assertEqual(len(sa_stats["top_books"]), 1)
+        self.assertNotIn("top_genres", sa_stats)
 
     async def test_post_reading_ratings_and_hof(self):
         u1_id = await database.get_or_create_user(self.db_path, tg_id=3001, username="user1")
         u2_id = await database.get_or_create_user(self.db_path, tg_id=3002, username="user2")
         u3_id = await database.get_or_create_user(self.db_path, tg_id=3003, username="user3")
 
-        b_id = await database.add_book(self.db_path, chat_id=-300, title="1984", author="George Orwell", genre="Dystopia")
+        b_id = await database.add_book(self.db_path, chat_id=-300, title="1984", author="George Orwell", genre=None)
         await database.update_books_status(self.db_path, [b_id], "won")
 
         await database.save_read_rating(self.db_path, tg_id=3001, book_id=b_id, score=10)

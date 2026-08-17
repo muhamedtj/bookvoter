@@ -119,9 +119,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Выбор истек или недействителен. Пожалуйста, запустите /suggest снова."
     },
     "book_added_confirmation_exact": {
-        "en": "✅ Book **«{title}»** ({author}) added to backlog.",
-        "ru": "✅ Книга «**{title}**» ({author}) добавлена в бэклог."
-    },
+"book_added": {
+    "en": "✅ Book **«{title}»** ({author}) added to backlog.",
+    "ru": "✅ Книга «**{title}**» ({author}) добавлена в бэклог."
+},
+"book_field_title": {
+    "en": "📖 **Title:** {title}",
+    "ru": "📖 **Название:** {title}"
+},
+"book_field_author": {
+    "en": "✍️ **Author:** {author}",
+    "ru": "✍️ **Автор:** {author}"
+},
+"btn_how_it_works": {
+    "en": "ℹ️ How it works",
+    "ru": "ℹ️ Как работает бот"
+},
     "help_msg": {
         "en": (
             "ℹ️ **How BookVoter Works**\n\n"

@@ -296,7 +296,6 @@ async def get_backlog_books_full_info(db_path: str, chat_id: int) -> List[Dict[s
 
 
 
-
 async def get_unrated_backlog_books_for_user(db_path: str, tg_id: int) -> List[Dict[str, Any]]:
     """Fetch all backlog books across chats where user is active that user hasn't rated yet."""
     internal_id = await get_or_create_user(db_path, tg_id)
