@@ -1,8 +1,8 @@
 """BookVoter runtime entrypoint.
 
 Stable business logic remains in bot_core.py. Product-facing behavior is split
-into small runtime override modules so UI/cleanup/reporting/library integration
-can evolve without another monolithic rewrite.
+into small runtime override modules so UI/cleanup/reporting/library/voting can
+evolve without another monolithic rewrite.
 """
 
 import asyncio
@@ -12,10 +12,12 @@ import bot_core as core
 import runtime_ux
 import runtime_library
 import runtime_reporting
+import runtime_voting
 
 runtime_ux.install()
 runtime_library.install()
 runtime_reporting.install()
+runtime_voting.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
