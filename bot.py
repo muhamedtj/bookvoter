@@ -19,6 +19,7 @@ import runtime_suggest
 import runtime_commands
 import runtime_cleanup
 import runtime_ratings
+import runtime_stage_pin
 
 runtime_ux.install()
 runtime_library.install()
@@ -30,6 +31,7 @@ runtime_suggest.install()
 runtime_commands.install()
 runtime_cleanup.install()
 runtime_ratings.install()
+runtime_stage_pin.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
