@@ -1109,16 +1109,18 @@ async def execute_downloader_and_send(
         if clean_author.lower() in invalid_authors:
             clean_author = ""
 
+        queries = []
         # Priority 1: Saved direct download command starting with /
         if saved_file_id and saved_file_id.strip().startswith("/"):
-            queries = [saved_file_id.strip()]
-        else:
-            # Priority 2: Title + Author (if valid)
-            if clean_author:
-                queries = [f"{book_title.strip()} {clean_author}".strip(), book_title.strip()]
-            else:
-                # Priority 3: Title only
-                queries = [book_title.strip()]
+            queries.append(saved_file_id.strip())
+
+        # Priority 2: Title + Author (if author is valid)
+        if clean_author:
+            queries.append(f"{book_title.strip()} {clean_author}".strip())
+
+        # Priority 3: Title only fallback
+        if book_title.strip() and book_title.strip() not in queries:
+            queries.append(book_title.strip())
 
         success = False
         last_error = ""

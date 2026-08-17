@@ -296,34 +296,11 @@ async def search_and_download(title: str) -> None:
                         raise ex
             return await app.send_message(target_channel, text_val)
 
-        # Case 1: Direct command starting with '/'
-        if title.startswith("/"):
-            try:
-                cmd_msg = await send_msg_with_retry(title)
-            except Exception as send_cmd_err:
-                sys.stderr.write(f"Failed to send direct download command '{title}': {send_cmd_err}\n")
-                sys.exit(1)
-
-            resp_msg = await wait_for_document_or_response(app, target_channel, cmd_msg.id, timeout_seconds=30)
-            if resp_msg and resp_msg.document:
-                file_name = resp_msg.document.file_name or "downloaded_book"
-                downloaded_path = await app.download_media(
-                    resp_msg,
-                    file_name=os.path.join(DOWNLOAD_DIR, file_name)
-                )
-
-            if downloaded_path and os.path.exists(downloaded_path):
-                print(os.path.abspath(downloaded_path))
-                sys.exit(0)
-            else:
-                sys.stderr.write(f"Timeout or file not received for direct command: {title}\n")
-                sys.exit(1)
-
-        # Case 2: General text query search
+        # Send query (direct command or search text)
         try:
             query_msg = await send_msg_with_retry(title)
-        except Exception as send_title_err:
-            sys.stderr.write(f"Failed to send query '{title}': {send_title_err}\n")
+        except Exception as send_err:
+            sys.stderr.write(f"Failed to send command/query '{title}': {send_err}\n")
             sys.exit(1)
 
         resp_msg = await wait_for_document_or_response(app, target_channel, query_msg.id, timeout_seconds=30)
