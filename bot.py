@@ -17,6 +17,7 @@ import runtime_menu
 import runtime_entry
 import runtime_suggest
 import runtime_commands
+import runtime_cleanup
 
 runtime_ux.install()
 runtime_library.install()
@@ -26,6 +27,7 @@ runtime_menu.install()
 runtime_entry.install()
 runtime_suggest.install()
 runtime_commands.install()
+runtime_cleanup.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
