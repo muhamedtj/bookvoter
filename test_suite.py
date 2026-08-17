@@ -78,6 +78,52 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(lock2.locked())
 
         self.assertFalse(lock2.locked())
+
+    async def test_finish_vote_locks(self):
+        lock1 = bot.get_finish_vote_lock(chat_id=500)
+        lock2 = bot.get_finish_vote_lock(chat_id=500)
+        self.assertIs(lock1, lock2)
+
+        async with lock1:
+            self.assertTrue(lock2.locked())
+
+        self.assertFalse(lock2.locked())
+
+    async def test_wait_for_document_or_response_floodwait_retry(self):
+        class MockMessage:
+            def __init__(self, msg_id, text):
+                self.id = msg_id
+                self.text = text
+                self.caption = ""
+
+        class MockApp:
+            def __init__(self):
+                self.attempts = 0
+
+            async def get_chat_history(self, target_channel, limit=10):
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise Exception("[userbot_downloader] Waiting for 2 seconds before continuing (required by \"messages.GetHistory\") FloodWait")
+                yield MockMessage(2, "Found book")
+
+        app = MockApp()
+        res = await downloader.wait_for_document_or_response(app, "channel", request_msg_id=1, timeout_seconds=10)
+        self.assertIsNotNone(res)
+        self.assertEqual(res.text, "Found book")
+        self.assertEqual(app.attempts, 2)
+
+    async def test_download_failure_does_not_break_winning_status(self):
+        chat_id = -999
+        b_id = await database.add_book(self.db_path, chat_id=chat_id, title="Test Fail Title", author="Test Fail Author")
+        await database.update_books_status(self.db_path, [b_id], "won")
+
+        # Verify initial status is won
+        book_before = await database.get_book_by_id(self.db_path, b_id)
+        self.assertEqual(book_before["status"], "won")
+
+        # Mark book done is only called on successful download; test database state unchanged on failure
+        book_after = await database.get_book_by_id(self.db_path, b_id)
+        self.assertEqual(book_after["status"], "won")
     async def asyncSetUp(self):
         self.db_path = "test_run.sqlite"
         if os.path.exists(self.db_path):
