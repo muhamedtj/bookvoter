@@ -603,7 +603,7 @@ async def launch_poll_for_books(chat_id: int, top_books: List[Dict[str, Any]], l
     book_ids = [b["id"] for b in top_books]
     await database.update_books_status(DATABASE_PATH, book_ids, "voting")
 
-    options = [f"{b['title']} — {b['author']}"[:100] for b in top_books]
+    options = [f"{b['title']} — {b['author']} (⭐ {round(b.get('avg_score', 0), 1)}/10)"[:100] for b in top_books]
     options_mapping = {idx: b["id"] for idx, b in enumerate(top_books)}
 
     poll_msg = await bot.send_poll(
