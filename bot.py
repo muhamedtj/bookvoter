@@ -6,14 +6,27 @@ fixes without another large monolithic rewrite.
 """
 
 import asyncio
+import os
 import sys
 from typing import Optional
+
+from aiogram.types import ForceReply
 
 import bot_core as _core
 
 
+pending_error_reports = {}
+
+
 def _label(lang: str, *, en: str, ru: str) -> str:
     return ru if lang == "ru" else en
+
+
+def _report_button(lang: str):
+    return _core.InlineKeyboardButton(
+        text=_core.t("btn_report_error", lang),
+        callback_data="report_error_v2",
+    )
 
 
 def get_welcome_keyboard(
@@ -44,22 +57,44 @@ def get_welcome_keyboard(
                 )
             ],
             [_core.InlineKeyboardButton(text=_core.t("btn_how_it_works", lang), callback_data="show_help")],
-            [_core.InlineKeyboardButton(text=_core.t("btn_report_error", lang), callback_data="report_error")],
+            [_report_button(lang)],
         ]
     else:
         rate_url = f"https://t.me/{bot_username}?start=rate_new"
         keyboard = [
             [_core.InlineKeyboardButton(text=_core.t("btn_rate_books", lang), url=rate_url)],
             [_core.InlineKeyboardButton(text=_core.t("btn_how_it_works", lang), callback_data="show_help")],
-            [_core.InlineKeyboardButton(text=_core.t("btn_report_error", lang), callback_data="report_error")],
+            [_report_button(lang)],
         ]
 
     return _core.InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-# Existing handlers resolve this global at runtime, so replacing it here updates
-# /start, language switching and the Back button without duplicating handlers.
+def get_help_keyboard(
+    lang: str,
+    bot_username: str,
+    include_back: bool = True,
+    chat_id: Optional[int] = None,
+):
+    """Help navigation using the tracked error-report flow."""
+    if chat_id and chat_id < 0:
+        rate_url = f"https://t.me/{bot_username}?start=rate_c{abs(chat_id)}"
+    else:
+        rate_url = f"https://t.me/{bot_username}?start=rate_new"
+
+    keyboard = [
+        [_core.InlineKeyboardButton(text=_core.t("btn_rate_books", lang), url=rate_url)],
+        [_report_button(lang)],
+    ]
+    if include_back:
+        keyboard.append(
+            [_core.InlineKeyboardButton(text=_core.t("btn_back", lang), callback_data="back_to_welcome")]
+        )
+    return _core.InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
 _core.get_welcome_keyboard = get_welcome_keyboard
+_core.get_help_keyboard = get_help_keyboard
 
 
 def _admin_status(status) -> bool:
@@ -83,9 +118,6 @@ async def is_admin(chat_id: int, user_id: int) -> bool:
     except Exception as exc:
         member_error = exc
 
-    # get_chat_member can be unreliable for arbitrary members when the bot has
-    # limited group permissions. The administrators list is a better fallback
-    # for detecting the group's creator/owner and administrators.
     try:
         administrators = await _core.bot.get_chat_administrators(chat_id)
         for admin_member in administrators:
@@ -116,11 +148,10 @@ async def notify_superadmin_error(
     chat_id: Optional[int] = None,
     context_info: str = "",
 ):
-    """Deliver diagnostics to configured superadmins.
+    """Deliver internal diagnostics to configured superadmins.
 
-    Manual reports have a group-admin DM fallback so the button remains useful
-    even when SUPER_ADMIN_IDS is not configured yet. Internal tracebacks never
-    use that fallback and therefore are not exposed to club administrators.
+    Legacy manual reports retain a group-admin fallback. Internal tracebacks never
+    use that fallback and therefore are not exposed to tenant group admins.
     """
     report = (
         f"🚨 <b>Critical Error Report</b>\n\n"
@@ -144,7 +175,6 @@ async def notify_superadmin_error(
             _core.logger.error(f"Failed to send error report to superadmin {admin_id}: {exc}")
 
     is_manual_report = error_title.startswith("User Error Report")
-
     if not delivered and is_manual_report and chat_id is not None and chat_id < 0:
         try:
             administrators = await _core.bot.get_chat_administrators(chat_id)
@@ -334,6 +364,266 @@ async def send_halloffame_response(
 _core.send_halloffame_response = send_halloffame_response
 
 
+async def _ensure_error_reports_table():
+    """Create persistent report storage lazily without coupling it to the core schema."""
+    async with _core.database.open_db(_core.DATABASE_PATH) as db:
+        await db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS error_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_tg_id INTEGER NOT NULL,
+                username TEXT,
+                user_name TEXT,
+                chat_id INTEGER,
+                chat_title TEXT,
+                source_message_id INTEGER,
+                source_screen TEXT,
+                description TEXT NOT NULL,
+                attachment_type TEXT,
+                attachment_file_id TEXT,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        await db.commit()
+
+
+async def _save_error_report(message, pending, description: str, attachment_type: str, attachment_file_id):
+    await _ensure_error_reports_table()
+    user = message.from_user
+    async with _core.database.open_db(_core.DATABASE_PATH) as db:
+        cursor = await db.execute(
+            """
+            INSERT INTO error_reports (
+                user_tg_id, username, user_name, chat_id, chat_title,
+                source_message_id, source_screen, description,
+                attachment_type, attachment_file_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+            """,
+            (
+                user.id,
+                user.username,
+                user.full_name,
+                pending.get("chat_id"),
+                pending.get("chat_title"),
+                pending.get("source_message_id"),
+                pending.get("source_screen"),
+                description,
+                attachment_type,
+                attachment_file_id,
+            ),
+        )
+        await db.commit()
+        return cursor.lastrowid
+
+
+async def _manual_report_recipients(chat_id: Optional[int]):
+    recipients = []
+    seen = set()
+
+    for admin_id in _core.SUPER_ADMIN_IDS:
+        if admin_id not in seen:
+            recipients.append(admin_id)
+            seen.add(admin_id)
+
+    if chat_id is not None and chat_id < 0:
+        try:
+            administrators = await _core.bot.get_chat_administrators(chat_id)
+            for member in administrators:
+                user = getattr(member, "user", None)
+                admin_id = getattr(user, "id", None)
+                if not admin_id or getattr(user, "is_bot", False) or admin_id in seen:
+                    continue
+                recipients.append(admin_id)
+                seen.add(admin_id)
+        except Exception as exc:
+            _core.logger.warning(f"Could not resolve group admins for error report: {exc}")
+
+    return recipients
+
+
+async def _send_tracked_error_report(report_id: int, message, pending, description: str, attachment_type: str):
+    user = message.from_user
+    username = f"@{user.username}" if user.username else "—"
+    chat_id = pending.get("chat_id")
+    chat_title = pending.get("chat_title") or "Private chat"
+    source_screen = (pending.get("source_screen") or "—")[:1000]
+    description_for_report = description[:1500]
+
+    build_sha = os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA") or "unknown"
+    if build_sha != "unknown":
+        build_sha = build_sha[:12]
+    deployment_id = os.getenv("RAILWAY_DEPLOYMENT_ID", "unknown")
+    service_name = os.getenv("RAILWAY_SERVICE_NAME", "BookVoter")
+
+    report = (
+        f"🐛 <b>BookVoter Error Report #{report_id}</b>\n\n"
+        f"📍 <b>Status:</b> OPEN\n"
+        f"👤 <b>Reporter:</b> {_core.escape_html(user.full_name or 'User')} ({username})\n"
+        f"🆔 <b>User ID:</b> {user.id}\n"
+        f"💬 <b>Club:</b> {_core.escape_html(chat_title)}\n"
+        f"🔢 <b>Chat ID:</b> {chat_id or 'N/A'}\n"
+        f"✉️ <b>Source message:</b> {pending.get('source_message_id') or 'N/A'}\n"
+        f"📎 <b>Attachment:</b> {_core.escape_html(attachment_type)}\n\n"
+        f"📝 <b>User description:</b>\n{_core.escape_html(description_for_report)}\n\n"
+        f"🖥 <b>Source screen:</b>\n<pre>{_core.escape_html(source_screen)}</pre>\n\n"
+        f"🚀 <b>Build:</b> {_core.escape_html(service_name)} · {_core.escape_html(build_sha)}\n"
+        f"🧩 <b>Deployment:</b> {_core.escape_html(deployment_id)}\n"
+        f"⏰ <b>Received:</b> {_core.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
+    delivered_to = []
+    for admin_id in await _manual_report_recipients(chat_id):
+        try:
+            await _core.bot.send_message(admin_id, report, parse_mode="HTML")
+            delivered_to.append(admin_id)
+        except Exception as exc:
+            _core.logger.warning(f"Failed to deliver tracked report #{report_id} to {admin_id}: {exc}")
+
+    if attachment_type != "none":
+        for admin_id in delivered_to:
+            try:
+                await _core.bot.copy_message(
+                    chat_id=admin_id,
+                    from_chat_id=message.chat.id,
+                    message_id=message.message_id,
+                )
+            except Exception as exc:
+                _core.logger.warning(f"Failed to copy attachment for report #{report_id} to {admin_id}: {exc}")
+
+    if not delivered_to:
+        _core.logger.error(f"Tracked report #{report_id} was saved but could not be delivered by DM.\n{report}")
+
+
+@_core.router.callback_query(_core.F.data == "report_error_v2")
+async def _start_tracked_error_report(callback: _core.CallbackQuery):
+    lang = await _core.get_lang(callback.message.chat.id, callback.from_user.id)
+    chat = callback.message.chat
+
+    prompt_text = _label(
+        lang,
+        en=(
+            "🐛 <b>Describe what went wrong</b>\n\n"
+            "Reply directly to this message with one message. You can attach a screenshot or file and add a caption. "
+            "I will automatically attach the club, your Telegram ID, the source screen and the current deployment version."
+        ),
+        ru=(
+            "🐛 <b>Опишите, что пошло не так</b>\n\n"
+            "Ответьте прямо на это сообщение одним сообщением. Можно приложить скриншот или файл и добавить подпись. "
+            "Я автоматически приложу клуб, ваш Telegram ID, экран, с которого отправлен отчёт, и версию текущего деплоя."
+        ),
+    )
+    placeholder = _label(
+        lang,
+        en="Describe the bug or attach a screenshot",
+        ru="Опишите ошибку или приложите скриншот",
+    )
+
+    prompt = await callback.message.answer(
+        prompt_text,
+        parse_mode="HTML",
+        reply_markup=ForceReply(selective=True, input_field_placeholder=placeholder[:64]),
+    )
+
+    pending_error_reports[callback.from_user.id] = {
+        "chat_id": chat.id,
+        "chat_title": getattr(chat, "title", None) or getattr(chat, "full_name", None) or "Private chat",
+        "source_message_id": callback.message.message_id,
+        "source_screen": callback.message.text or callback.message.caption or "",
+        "prompt_message_id": prompt.message_id,
+    }
+
+    await callback.answer(
+        _label(
+            lang,
+            en="Reply to the new bot message with details.",
+            ru="Ответьте на новое сообщение бота с описанием.",
+        ),
+        show_alert=True,
+    )
+
+
+@_core.router.message()
+async def _capture_tracked_error_report(message: _core.Message):
+    """Catch ordinary messages after all core handlers; process only report ForceReplies."""
+    user = message.from_user
+    if not user:
+        return
+
+    pending = pending_error_reports.get(user.id)
+    if pending:
+        reply = message.reply_to_message
+        if (
+            message.chat.id == pending.get("chat_id")
+            and reply
+            and reply.message_id == pending.get("prompt_message_id")
+        ):
+            lang = await _core.get_lang(message.chat.id, user.id)
+            description = (message.text or message.caption or "").strip()
+
+            attachment_type = "none"
+            attachment_file_id = None
+            if message.photo:
+                attachment_type = "photo"
+                attachment_file_id = message.photo[-1].file_id
+            elif message.document:
+                attachment_type = "document"
+                attachment_file_id = message.document.file_id
+            elif message.video:
+                attachment_type = "video"
+                attachment_file_id = message.video.file_id
+            elif message.voice:
+                attachment_type = "voice"
+                attachment_file_id = message.voice.file_id
+
+            if not description:
+                if attachment_type != "none":
+                    description = _label(
+                        lang,
+                        en="Attachment submitted without a text description.",
+                        ru="Приложение отправлено без текстового описания.",
+                    )
+                else:
+                    await message.answer(
+                        _label(
+                            lang,
+                            en="Please add a short description or attach a screenshot.",
+                            ru="Добавьте короткое описание или приложите скриншот.",
+                        )
+                    )
+                    return
+
+            report_id = await _save_error_report(
+                message,
+                pending,
+                description,
+                attachment_type,
+                attachment_file_id,
+            )
+            pending_error_reports.pop(user.id, None)
+
+            await _send_tracked_error_report(
+                report_id,
+                message,
+                pending,
+                description,
+                attachment_type,
+            )
+
+            await message.answer(
+                _label(
+                    lang,
+                    en=f"✅ Report #{report_id} saved and sent. Thank you!",
+                    ru=f"✅ Отчёт #{report_id} сохранён и отправлен. Спасибо!",
+                )
+            )
+            return
+
+    if message.chat.type in (_core.ChatType.GROUP, _core.ChatType.SUPERGROUP):
+        await _core.database.record_chat_member(_core.DATABASE_PATH, message.chat.id, user.id)
+
+
 @_core.router.callback_query(_core.F.data == "show_backlog")
 async def _show_backlog(callback: _core.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -424,8 +714,6 @@ async def _show_suggest_help(callback: _core.CallbackQuery):
     )
 
 
-# When imported (tests, scripts), expose the patched core module under the public
-# name `bot` so monkeypatches such as `bot.bot = ...` keep working as before.
 if __name__ == "__main__":
     asyncio.run(_core.main())
 else:
