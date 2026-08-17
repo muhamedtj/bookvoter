@@ -26,6 +26,38 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         btn2 = downloader.select_best_button(k2)
         self.assertEqual(btn2.text, "FB2")
 
+    def test_search_parsing_intermediate_button_scenario(self):
+        query_title = "Толкин"
+
+        # 1. Message 1: Intermediate prompt with button repeating "Толкин"
+        msg1_text = "Поиск по запросу: Толкин..."
+        msg1_buttons = [[DummyButton("Толкин", "search_tolkien")]]
+
+        res1 = downloader.parse_library_response(
+            msg_text=msg1_text,
+            reply_markup=msg1_buttons,
+            query_title=query_title
+        )
+        self.assertEqual(res1, [], "Intermediate prompt button 'Толкин' must be ignored and return empty results")
+
+        # 2. Message 2: Full book card message
+        msg2_text = (
+            "Толкин и Великая война. На пороге Средиземья - ru\n"
+            "Толкин – творец Средиземья\n"
+            "Джон Гарт\n"
+            "Скачать книгу: /download682541"
+        )
+        res2 = downloader.parse_library_response(
+            msg_text=msg2_text,
+            reply_markup=None,
+            query_title=query_title
+        )
+        self.assertEqual(len(res2), 1)
+        self.assertEqual(res2[0]["title"], "Толкин и Великая война. На пороге Средиземья")
+        self.assertEqual(res2[0]["author"], "Джон Гарт")
+        self.assertEqual(res2[0]["download_cmd"], "/download682541")
+        self.assertNotEqual(res2[0]["title"], "Толкин")
+
     async def test_download_locks(self):
         lock1 = bot.get_download_lock(chat_id=100, book_id=1)
         lock2 = bot.get_download_lock(chat_id=100, book_id=1)
