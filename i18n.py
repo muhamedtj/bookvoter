@@ -6,27 +6,27 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Неизвестный автор"
     },
     "select_language_prompt": {
-        "en": "🌐 **Please select your language / Пожалуйста, выберите язык:**",
-        "ru": "🌐 **Пожалуйста, выберите язык / Please select your language:**"
+        "en": "🌐 <b>Please select your language / Пожалуйста, выберите язык:</b>",
+        "ru": "🌐 <b>Пожалуйста, выберите язык / Please select your language:</b>"
     },
     "language_selected": {
-        "en": "✅ Language set to **English**!",
-        "ru": "✅ Язык установлен на **Русский**!"
+        "en": "✅ Language set to <b>English</b>!",
+        "ru": "✅ Язык установлен на <b>Русский</b>!"
     },
     "welcome_msg": {
         "en": (
-            "📚 **BookVoter**\n\n"
+            "📚 <b>BookVoter</b>\n\n"
             "Choose your next book with your club.\n\n"
             "Suggest books, rate interest, vote, and give final ratings after reading.\n\n"
             "📖 Suggest a book:\n"
-            "`/suggest Book title`"
+            "<code>/suggest Book title</code>"
         ),
         "ru": (
-            "📚 **BookVoter**\n\n"
+            "📚 <b>BookVoter</b>\n\n"
             "Выбирайте следующую книгу вместе с клубом.\n\n"
             "Предлагайте книги, оценивайте интерес, голосуйте и выставляйте итоговые оценки после чтения.\n\n"
             "📖 Предложить книгу:\n"
-            "`/suggest Название книги`"
+            "<code>/suggest Название книги</code>"
         )
     },
     # Buttons
@@ -78,21 +78,37 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "⬅️ Back to panel",
         "ru": "⬅️ Назад в панель"
     },
+    "btn_back_to_menu": {
+        "en": "⬅️ Back to menu",
+        "ru": "⬅️ Назад в меню"
+    },
     "btn_did_not_read": {
         "en": "Didn't read",
         "ru": "Не читал"
+    },
+    "btn_prev_page": {
+        "en": "⬅️ Previous",
+        "ru": "⬅️ Назад"
+    },
+    "btn_next_page": {
+        "en": "Next ➡️",
+        "ru": "Вперед ➡️"
     },
     "error_reported_thanks": {
         "en": "✅ Thank you. The error report has been sent.",
         "ru": "✅ Спасибо. Сообщение об ошибке отправлено."
     },
     "control_panel_dm_notice": {
-        "en": "⚙️ The Control Panel is available in the book club group chat. Open the group and type `/bookvoter`.",
-        "ru": "⚙️ Панель управления доступна в группе книжного клуба. Откройте группу и вызовите `/bookvoter`."
+        "en": "⚙️ The Control Panel is available in the book club group chat. Open the group and type <code>/bookvoter</code>.",
+        "ru": "⚙️ Панель управления доступна в группе книжного клуба. Откройте группу и вызовите <code>/bookvoter</code>."
     },
     "suggest_usage": {
-        "en": "Please specify a book title, e.g.: `/suggest Dune`",
-        "ru": "Пожалуйста, укажите название книги, например: `/suggest Дюна`"
+        "en": "Please specify a book title, e.g.: <code>/suggest Dune</code>",
+        "ru": "Пожалуйста, укажите название книги, например: <code>/suggest Дюна</code>"
+    },
+    "suggest_private_err": {
+        "en": "⚠️ Book suggestions belong to a club. Please use <code>/suggest</code> inside your book club group.",
+        "ru": "⚠️ Предложения книг относятся к клубу. Пожалуйста, используйте <code>/suggest</code> в вашей группе книжного клуба."
     },
     "searching_google_books": {
         "en": "🔎 Searching for the book...",
@@ -119,50 +135,50 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Выбор истек или недействителен. Пожалуйста, запустите /suggest снова."
     },
     "book_added_confirmation_exact": {
-        "en": "✅ Book **«{title}»** ({author}) added to backlog.",
-        "ru": "✅ Книга «**{title}**» ({author}) добавлена в бэклог."
+        "en": "✅ Book <b>«{title}»</b> ({author}) added to backlog.",
+        "ru": "✅ Книга <b>«{title}»</b> ({author}) добавлена в бэклог."
     },
     "help_msg": {
         "en": (
-            "ℹ️ **How BookVoter Works**\n\n"
-            "1. **Suggest a book**\n"
+            "ℹ️ <b>How BookVoter Works</b>\n\n"
+            "1. <b>Suggest a book</b>\n"
             "   In the group chat, type:\n"
-            "   `/suggest Book Title`\n\n"
-            "2. **Select the matching edition**\n"
+            "   <code>/suggest Book Title</code>\n\n"
+            "2. <b>Select the matching edition</b>\n"
             "   The bot will display search results. Tap the right book to add it to the club's backlog.\n\n"
-            "3. **Rate your interest**\n"
+            "3. <b>Rate your interest</b>\n"
             "   Open a private chat with the bot and rate books from 1 to 10.\n"
             "   The higher your score, the more you want to read the book.\n"
             "   Your interest ratings remain private to you.\n\n"
-            "4. **Vote for the next book**\n"
+            "4. <b>Vote for the next book</b>\n"
             "   Books with the highest interest ratings enter the next vote.\n"
             "   An administrator starts the vote, and members choose the next book for the club.\n"
             "   Voting lasts up to 24 hours and may end earlier if one book receives more than 50% of the votes.\n\n"
-            "5. **Read and rate**\n"
+            "5. <b>Read and rate</b>\n"
             "   After the vote, the bot delivers the book file to the group.\n"
             "   When the club finishes reading, rate the book from 1 to 10 — or mark that you didn't read it.\n\n"
-            "🏆 Read books enter the **Hall of Fame** with the club's final score.\n\n"
+            "🏆 Read books enter the <b>Hall of Fame</b> with the club's final score.\n\n"
             "If you notice an issue, tap \"Report an error\"."
         ),
         "ru": (
-            "ℹ️ **Как работает BookVoter**\n\n"
-            "1. **Предложите книгу**\n"
+            "ℹ️ <b>Как работает BookVoter</b>\n\n"
+            "1. <b>Предложите книгу</b>\n"
             "   В группе напишите:\n"
-            "   `/suggest Название книги`\n\n"
-            "2. **Выберите подходящее издание**\n"
+            "   <code>/suggest Название книги</code>\n\n"
+            "2. <b>Выберите подходящее издание</b>\n"
             "   Бот покажет найденные варианты. Нажмите на нужную книгу — она попадёт в общий список клуба.\n\n"
-            "3. **Оцените интерес к книгам**\n"
+            "3. <b>Оцените интерес к книгам</b>\n"
             "   Перейдите в личные сообщения с ботом и поставьте книгам оценку от 1 до 10.\n"
             "   Чем выше ваша оценка, тем сильнее вы хотите прочитать книгу.\n"
             "   Ваши оценки интереса видите только вы.\n\n"
-            "4. **Голосуйте за следующую книгу**\n"
+            "4. <b>Голосуйте за следующую книгу</b>\n"
             "   Книги с самыми высокими оценками интереса попадают в следующее голосование.\n"
             "   Администратор запускает голосование, и участники выбирают следующую книгу клуба.\n"
             "   Голосование длится до 24 часов и может завершиться раньше, если одна книга получит больше половины голосов.\n\n"
-            "5. **Читайте и оценивайте**\n"
+            "5. <b>Читайте и оценивайте</b>\n"
             "   После выбора бот отправит книгу в группу.\n"
             "   Когда клуб закончит чтение, поставьте книге итоговую оценку от 1 до 10 — или отметьте, что не читали её.\n\n"
-            "🏆 Прочитанные книги попадают в **Зал славы** клуба с итоговой оценкой.\n\n"
+            "🏆 Прочитанные книги попадают в <b>Зал славы</b> клуба с итоговой оценкой.\n\n"
             "Если заметили проблему, нажмите «Сообщить об ошибке»."
         )
     },
@@ -171,28 +187,28 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Нажмите ниже, чтобы оценить книги в личных сообщениях!"
     },
     "all_caught_up_rating": {
-        "en": "🎉 **All caught up!** You have rated all available backlog books for your groups.",
-        "ru": "🎉 **Всё оценено!** Вы оценили все доступные книги из бэклога ваших групп."
+        "en": "🎉 <b>All caught up!</b> You have rated all available backlog books for your groups.",
+        "ru": "🎉 <b>Всё оценено!</b> Вы оценили все доступные книги из бэклога ваших групп."
     },
     "rate_prompt_group": {
-        "en": "📚 **Group:** {chat_title}\n\n📖 **Title:** {title}\n✍️ **Author:** {author}\n\nHow strongly do you want to read this book?",
-        "ru": "📚 **Группа:** {chat_title}\n\n📖 **Название:** {title}\n✍️ **Автор:** {author}\n\nНасколько сильно вы хотите прочитать эту книгу?"
+        "en": "📚 <b>Group:</b> {chat_title}\n\n📖 <b>Title:</b> {title}\n✍️ <b>Author:</b> {author}\n\nHow strongly do you want to read this book?",
+        "ru": "📚 <b>Группа:</b> {chat_title}\n\n📖 <b>Название:</b> {title}\n✍️ <b>Автор:</b> {author}\n\nНасколько сильно вы хотите прочитать эту книгу?"
     },
     "saved_score_cb": {
         "en": "Saved score: {score}/10",
         "ru": "Сохранена оценка: {score}/10"
     },
     "backlog_list_header": {
-        "en": "📚 **Club Backlog**\n\n",
-        "ru": "📚 **Бэклог клуба**\n\n"
+        "en": "📚 <b>Club Backlog</b>\n\n",
+        "ru": "📚 <b>Бэклог клуба</b>\n\n"
     },
     "backlog_item_format": {
-        "en": "{idx}. **{title}** — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n",
-        "ru": "{idx}. **{title}** — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n"
+        "en": "{idx}. <b>{title}</b> — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n",
+        "ru": "{idx}. <b>{title}</b> — {author}\n   ⭐ {score}/10 · 👤 {suggestor}\n\n"
     },
     "backlog_empty": {
-        "en": "📜 Backlog is currently empty. Add books using `/suggest`!",
-        "ru": "📜 Бэклог пока пуст. Добавьте книги с помощью `/suggest`!"
+        "en": "📜 Backlog is currently empty. Add books using <code>/suggest</code>!",
+        "ru": "📜 Бэклог пока пуст. Добавьте книги с помощью <code>/suggest</code>!"
     },
     "only_admins_allowed": {
         "en": "⚠️ Only group administrators can perform this action.",
@@ -200,28 +216,28 @@ STRINGS: Dict[str, Dict[str, str]] = {
     },
     # Admin Panel States
     "admin_panel_title": {
-        "en": "⚙️ **BookVoter Control Panel**",
-        "ru": "⚙️ **Панель управления BookVoter**"
+        "en": "⚙️ <b>BookVoter Control Panel</b>",
+        "ru": "⚙️ <b>Панель управления BookVoter</b>"
     },
     "admin_state_ready": {
-        "en": "⚙️ **BookVoter Control Panel**\n\n📚 You can choose the next book.",
-        "ru": "⚙️ **Панель управления BookVoter**\n\n📚 Можно выбрать следующую книгу."
+        "en": "⚙️ <b>BookVoter Control Panel</b>\n\n📚 You can choose the next book.",
+        "ru": "⚙️ <b>Панель управления BookVoter</b>\n\n📚 Можно выбрать следующую книгу."
     },
     "admin_state_voting": {
-        "en": "⚙️ **BookVoter Control Panel**\n\n🗳 Voting for the next book is currently in progress.",
-        "ru": "⚙️ **Панель управления BookVoter**\n\n🗳 Сейчас идёт голосование за следующую книгу."
+        "en": "⚙️ <b>BookVoter Control Panel</b>\n\n🗳 Voting for the next book is currently in progress.",
+        "ru": "⚙️ <b>Панель управления BookVoter</b>\n\n🗳 Сейчас идёт голосование за следующую книгу."
     },
     "admin_state_reading": {
-        "en": "⚙️ **BookVoter Control Panel**\n\n📖 Currently reading: **{title}** — {author}",
-        "ru": "⚙️ **Панель управления BookVoter**\n\n📖 Сейчас читаем: **{title}** — {author}"
+        "en": "⚙️ <b>BookVoter Control Panel</b>\n\n📖 Currently reading: <b>{title}</b> — {author}",
+        "ru": "⚙️ <b>Панель управления BookVoter</b>\n\n📖 Сейчас читаем: <b>{title}</b> — {author}"
     },
     "audit_title": {
-        "en": "🔍 **Backlog Activity Audit Report:**\n\n",
-        "ru": "🔍 **Отчет проверки активности бэклога:**\n\n"
+        "en": "🔍 <b>Backlog Activity Audit Report:</b>\n\n",
+        "ru": "🔍 <b>Отчет проверки активности бэклога:</b>\n\n"
     },
     "audit_clean": {
-        "en": "✅ **Audit clean!** All backlog books were suggested by active, participating members.",
-        "ru": "✅ **Проверка чистая!** Все книги в бэклоге предложены активными участниками группы."
+        "en": "✅ <b>Audit clean!</b> All backlog books were suggested by active, participating members.",
+        "ru": "✅ <b>Проверка чистая!</b> Все книги в бэклоге предложены активными участниками группы."
     },
     "reason_departed": {
         "en": "Suggested by departed member",
@@ -240,16 +256,16 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "За 30 дней"
     },
     "select_book_to_delete": {
-        "en": "🗑 **Select a book to delete from backlog:**",
-        "ru": "🗑 **Выберите книгу для удаления из бэклога:**"
+        "en": "🗑 <b>Select a book to delete from backlog:</b>",
+        "ru": "🗑 <b>Выберите книгу для удаления из бэклога:</b>"
     },
     "no_books_to_delete": {
         "en": "❌ No books found in backlog to delete.",
         "ru": "❌ В бэклоге нет книг для удаления."
     },
     "book_deleted_success": {
-        "en": "✅ Book **{title}** has been deleted.",
-        "ru": "✅ Книга **{title}** была успешно удалена."
+        "en": "✅ Book <b>{title}</b> has been deleted.",
+        "ru": "✅ Книга <b>{title}</b> была успешно удалена."
     },
     "vote_in_progress_err": {
         "en": "⚠️ A vote is already in progress for this group!",
@@ -258,6 +274,22 @@ STRINGS: Dict[str, Dict[str, str]] = {
     "no_backlog_books_err": {
         "en": "There are currently no books in the backlog for voting.",
         "ru": "В бэклоге пока нет книг для голосования."
+    },
+    "min_two_books_err": {
+        "en": "⚠️ At least two books are required for voting. Currently only one book is available in the backlog.",
+        "ru": "⚠️ Для голосования нужно минимум две книги. Сейчас в бэклоге доступна только одна."
+    },
+    "active_reading_exists_err": {
+        "en": "📖 The club is currently reading «{title}». Finish reading before starting a new vote.",
+        "ru": "📖 Сейчас клуб читает «{title}». Завершите чтение перед новым голосованием."
+    },
+    "poll_launch_failed_err": {
+        "en": "⚠️ Failed to launch voting poll. Please try again.",
+        "ru": "⚠️ Не удалось запустить голосование. Попробуйте еще раз."
+    },
+    "zero_votes_ended_msg": {
+        "en": "⚠️ No one voted. Voting finished with no winner, books were returned to the backlog.",
+        "ru": "⚠️ Никто не проголосовал. Голосование завершено без победителя, книги возвращены в бэклог."
     },
     "poll_question": {
         "en": "🗳 Vote for the next book to read!",
@@ -272,12 +304,12 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "⚠️ Нет активного голосования для завершения."
     },
     "voting_ended_title": {
-        "en": "🏆 **Next book selected**\n\n**{title}** — {author}",
-        "ru": "🏆 **Выбрана следующая книга**\n\n**{title}** — {author}"
+        "en": "🏆 <b>Next book selected</b>\n\n<b>{title}</b> — {author}",
+        "ru": "🏆 <b>Выбрана следующая книга</b>\n\n<b>{title}</b> — {author}"
     },
     "book_file_caption": {
-        "en": "📚 Here is your book: **{title}**",
-        "ru": "📚 Ваша книга: **{title}**"
+        "en": "📚 Here is your book: <b>{title}</b>",
+        "ru": "📚 Ваша книга: <b>{title}</b>"
     },
     "file_not_found_in_lib": {
         "en": "⚠️ Book selected, but the file could not be retrieved automatically.",
@@ -296,8 +328,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "Чтение завершено! Карточка оценки отправлена в чат."
     },
     "finish_reading_card_title": {
-        "en": "📖 **{title}** — {author}\n\nHow do you rate this book?",
-        "ru": "📖 **{title}** — {author}\n\nКак вы оцениваете книгу?"
+        "en": "📖 <b>{title}</b> — {author}\n\nHow do you rate this book?",
+        "ru": "📖 <b>{title}</b> — {author}\n\nКак вы оцениваете книгу?"
     },
     "saved_read_score_cb": {
         "en": "Your score {score}/10 accepted!",
@@ -307,37 +339,49 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "en": "Recorded: Didn't read",
         "ru": "Зафиксировано: Не читал"
     },
+    "rating_not_active_err": {
+        "en": "⚠️ Rating is allowed only after reading is finished.",
+        "ru": "⚠️ Оценка книги возможна только после завершения чтения."
+    },
+    "invalid_callback_group_err": {
+        "en": "⚠️ Invalid action for this group.",
+        "ru": "⚠️ Недопустимое действие для этой группы."
+    },
+    "not_group_member_err": {
+        "en": "⚠️ You are not a member of this book club.",
+        "ru": "⚠️ Вы не являетесь участником этого книжного клуба."
+    },
     "vote_feedback_msg": {
-        "en": "Thank you! Your rating is accepted.\n\nCurrent average score for **{title}**: **{avg_rating}** (based on {count} votes).",
-        "ru": "Спасибо! Ваша оценка принята.\n\nСредний балл по книге **{title}** сейчас: **{avg_rating}** (на основе {count} голосов)."
+        "en": "📖 <b>{title}</b> — {author}\n\nHow do you rate this book?\n\n📊 Current average: <b>{avg_rating}</b>/10 ({count} votes)",
+        "ru": "📖 <b>{title}</b> — {author}\n\nКак вы оцениваете книгу?\n\n📊 Средний балл: <b>{avg_rating}</b>/10 ({count} голосов)"
     },
     "hof_header": {
-        "en": "🏆 **Hall of Fame**\n\n",
-        "ru": "🏆 **Зал славы**\n\n"
+        "en": "🏆 <b>Hall of Fame</b>\n\n",
+        "ru": "🏆 <b>Зал славы</b>\n\n"
     },
     "hof_low_votes_header": {
-        "en": "\n\n⚠️ **Low Votes (< {min_votes} votes):**\n",
-        "ru": "\n\n⚠️ **Мало оценок (менее {min_votes} голосов):**\n"
+        "en": "\n\n⚠️ <b>Low Votes (&lt; {min_votes} votes):</b>\n",
+        "ru": "\n\n⚠️ <b>Мало оценок (менее {min_votes} голосов):</b>\n"
     },
     "hof_empty": {
         "en": "🏆 Hall of Fame is currently empty.",
         "ru": "🏆 Зал славы пока пуст."
     },
     "hof_item_format": {
-        "en": "{idx}. **{title}** — {author}\n   ⭐ {wr} · 👥 {count}",
-        "ru": "{idx}. **{title}** — {author}\n   ⭐ {wr} · 👥 {count}"
+        "en": "{idx}. <b>{title}</b> — {author}\n   ⭐ {wr} · 👥 {count}",
+        "ru": "{idx}. <b>{title}</b> — {author}\n   ⭐ {wr} · 👥 {count}"
     },
     "btn_hof_delete_book": {
         "en": "🗑 Delete Book from Hall of Fame",
         "ru": "🗑 Удалить книгу из Зала славы"
     },
     "select_hof_book_to_delete": {
-        "en": "🗑 **Select a book to remove from Hall of Fame:**",
-        "ru": "🗑 **Выберите книгу для удаления из Зала славы:**"
+        "en": "🗑 <b>Select a book to remove from Hall of Fame:</b>",
+        "ru": "🗑 <b>Выберите книгу для удаления из Зала славы:</b>"
     },
     "hof_confirm_delete_prompt": {
-        "en": "❓ Are you sure you want to remove **{title}** from the Hall of Fame?",
-        "ru": "❓ Вы уверены, что хотите удалить книгу **{title}** из Зала славы?"
+        "en": "❓ Are you sure you want to remove <b>{title}</b> from the Hall of Fame?",
+        "ru": "❓ Вы уверены, что хотите удалить книгу <b>{title}</b> из Зала славы?"
     },
     "btn_confirm_yes": {
         "en": "✅ Yes, delete",
@@ -348,41 +392,41 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ru": "❌ Отмена"
     },
     "hof_deleted_success": {
-        "en": "✅ Book **{title}** removed from Hall of Fame.",
-        "ru": "✅ Книга **{title}** была удалена из Зала славы."
+        "en": "✅ Book <b>{title}</b> removed from Hall of Fame.",
+        "ru": "✅ Книга <b>{title}</b> была удалена из Зала славы."
     },
     "group_stats_text": {
         "en": (
-            "📊 **Group Statistics ({filter_label})**\n\n"
-            "• Backlog Books: **{backlog_count}**\n"
-            "• Completed Books: **{done_count}**\n"
-            "• Avg Desire Rating: **{avg_club_rating}/10**\n\n"
-            "🏆 **Top Contributors:**\n{contributors_str}\n\n"
-            "🗳️ **Top Voters:**\n{voters_str}"
+            "📊 <b>Group Statistics ({filter_label})</b>\n\n"
+            "• Backlog Books: <b>{backlog_count}</b>\n"
+            "• Completed Books: <b>{done_count}</b>\n"
+            "• Avg Desire Rating: <b>{avg_club_rating}/10</b>\n\n"
+            "🏆 <b>Top Contributors:</b>\n{contributors_str}\n\n"
+            "🗳️ <b>Top Voters:</b>\n{voters_str}"
         ),
         "ru": (
-            "📊 **Статистика группы ({filter_label})**\n\n"
-            "• Книг в бэклоге: **{backlog_count}**\n"
-            "• Прочитано книг: **{done_count}**\n"
-            "• Средний рейтинг желания: **{avg_club_rating}/10**\n\n"
-            "🏆 **Топ авторов предложений:**\n{contributors_str}\n\n"
-            "🗳️ **Самые активные голосующие:**\n{voters_str}"
+            "📊 <b>Статистика группы ({filter_label})</b>\n\n"
+            "• Книг в бэклоге: <b>{backlog_count}</b>\n"
+            "• Прочитано книг: <b>{done_count}</b>\n"
+            "• Средний рейтинг желания: <b>{avg_club_rating}/10</b>\n\n"
+            "🏆 <b>Топ авторов предложений:</b>\n{contributors_str}\n\n"
+            "🗳️ <b>Самые активные голосующие:</b>\n{voters_str}"
         )
     },
     "sys_stats_text": {
         "en": (
-            "🌐 **Global Superadmin Dashboard ({filter_label})**\n\n"
-            "• Total Active Groups: **{total_active_chats}**\n"
-            "• Total Unique Voters: **{total_voters}**\n"
-            "• Total Suggested Books: **{total_books_suggested}**\n\n"
-            "🔥 **Top Books by Wish Score:**\n{top_books_str}"
+            "🌐 <b>Global Superadmin Dashboard ({filter_label})</b>\n\n"
+            "• Total Active Groups: <b>{total_active_chats}</b>\n"
+            "• Total Unique Voters: <b>{total_voters}</b>\n"
+            "• Total Suggested Books: <b>{total_books_suggested}</b>\n\n"
+            "🔥 <b>Top Books by Wish Score:</b>\n{top_books_str}"
         ),
         "ru": (
-            "🌐 **Глобальная панель супер-админа ({filter_label})**\n\n"
-            "• Всего активных групп: **{total_active_chats}**\n"
-            "• Уникальных проголосовавших: **{total_voters}**\n"
-            "• Всего предложено книг: **{total_books_suggested}**\n\n"
-            "🔥 **Топ книг по рейтингу желания:**\n{top_books_str}"
+            "🌐 <b>Глобальная панель супер-админа ({filter_label})</b>\n\n"
+            "• Всего активных групп: <b>{total_active_chats}</b>\n"
+            "• Уникальных проголосовавших: <b>{total_voters}</b>\n"
+            "• Всего предложено книг: <b>{total_books_suggested}</b>\n\n"
+            "🔥 <b>Топ книг по рейтингу желания:</b>\n{top_books_str}"
         )
     }
 }

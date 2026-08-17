@@ -7,6 +7,10 @@ import logging
 from typing import Any
 from dotenv import load_dotenv
 from pyrogram import Client
+try:
+    from pyrogram.errors import FloodWait
+except ImportError:
+    FloodWait = Exception
 
 # Load environment variables
 load_dotenv()
@@ -250,6 +254,43 @@ def parse_message_for_books(message: Any, query_title: str = "") -> list[dict]:
     )
 
 
+async def send_message_with_floodwait(app: Client, target_channel: Any, text: str) -> Any:
+    """Send message with Pyrogram FloodWait retry protection."""
+    for _ in range(5):
+        try:
+            return await app.send_message(target_channel, text)
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value)
+        except Exception as e:
+            if "FloodWait" in str(e):
+                m = re.search(r"(\d+)\s*second", str(e), re.IGNORECASE)
+                w_sec = int(m.group(1)) if m else 3
+                await asyncio.sleep(w_sec)
+            else:
+                raise e
+    return await app.send_message(target_channel, text)
+
+
+async def check_history_with_floodwait(app: Client, target_channel: Any) -> int:
+    """Check chat history limit 1 with FloodWait protection."""
+    for _ in range(5):
+        try:
+            count = 0
+            async for _ in app.get_chat_history(target_channel, limit=1):
+                count += 1
+            return count
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value)
+        except Exception as e:
+            if "FloodWait" in str(e):
+                m = re.search(r"(\d+)\s*second", str(e), re.IGNORECASE)
+                w_sec = int(m.group(1)) if m else 3
+                await asyncio.sleep(w_sec)
+            else:
+                return 1
+    return 1
+
+
 async def search_options_via_userbot(query_title: str) -> None:
     if not API_ID or not API_HASH or not SESSION_STRING or not CHANNEL_ID:
         sys.stderr.write("Error: Missing required environment variables (API_ID, API_HASH, SESSION_STRING, CHANNEL_ID).\n")
@@ -274,19 +315,17 @@ async def search_options_via_userbot(query_title: str) -> None:
 
     try:
         # 1. Check if chat history is completely empty; send /start only once on initial session setup
-        history_count = 0
-        async for _ in app.get_chat_history(target_channel, limit=1):
-            history_count += 1
+        history_count = await check_history_with_floodwait(app, target_channel)
 
         if history_count == 0:
             try:
-                await app.send_message(target_channel, "/start")
+                await send_message_with_floodwait(app, target_channel, "/start")
                 await asyncio.sleep(2)
             except Exception as ex:
                 logging.warning(f"Could not send /start: {ex}")
 
         # 2. Send query directly with book title and save query_msg.id
-        query_msg = await app.send_message(target_channel, query_title)
+        query_msg = await send_message_with_floodwait(app, target_channel, query_title)
 
         results = []
         start_time = asyncio.get_running_loop().time()
@@ -310,6 +349,8 @@ async def search_options_via_userbot(query_title: str) -> None:
                                 for r in candidate_results
                             ):
                                 candidate_results.append(b)
+            except FloodWait as fw:
+                await asyncio.sleep(fw.value)
             except Exception as poll_err:
                 logging.warning(f"Error while polling chat history: {poll_err}")
 
@@ -335,15 +376,7 @@ async def search_options_via_userbot(query_title: str) -> None:
 
             await asyncio.sleep(poll_interval)
 
-        if not results:
-            # Fallback using query_title
-            results.append({
-                "title": query_title.title(),
-                "author": "Unknown Author",
-                "genre": "",
-                "raw_label": query_title.title()
-            })
-
+        # Do NOT return fake fallback results on search failure/timeout
         print(json.dumps(results, ensure_ascii=False))
         sys.exit(0)
 
@@ -366,6 +399,13 @@ async def wait_for_document_or_response(app: Client, target_channel: Any, reques
                 if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
                     continue
                 return message
+        except FloodWait as fw:
+            rem_time = timeout_seconds - (asyncio.get_event_loop().time() - start_time)
+            if fw.value < rem_time:
+                await asyncio.sleep(fw.value)
+                continue
+            else:
+                break
         except Exception as e:
             err_str = str(e)
             if "FloodWait" in err_str or "GetHistory" in err_str:
@@ -428,36 +468,19 @@ async def search_and_download(title: str) -> None:
         downloaded_path = None
 
         # Send /start only if history is completely empty
-        history_count = 0
-        async for _ in app.get_chat_history(target_channel, limit=1):
-            history_count += 1
+        history_count = await check_history_with_floodwait(app, target_channel)
 
         if history_count == 0:
             try:
-                await app.send_message(target_channel, "/start")
+                await send_message_with_floodwait(app, target_channel, "/start")
                 await asyncio.sleep(2)
             except Exception as start_err:
                 logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
 
-        # Helper for sending messages with FloodWait retry
-        async def send_msg_with_retry(text_val: str) -> Any:
-            for _ in range(3):
-                try:
-                    return await app.send_message(target_channel, text_val)
-                except Exception as ex:
-                    ex_str = str(ex)
-                    if "FloodWait" in ex_str:
-                        m = re.search(r"(\d+)\s*second", ex_str, re.IGNORECASE)
-                        w_sec = int(m.group(1)) if m else 3
-                        await asyncio.sleep(w_sec)
-                    else:
-                        raise ex
-            return await app.send_message(target_channel, text_val)
-
         # Case 1: Direct command starting with '/'
         if title.startswith("/"):
             try:
-                cmd_msg = await send_msg_with_retry(title)
+                cmd_msg = await send_message_with_floodwait(app, target_channel, title)
             except Exception as send_cmd_err:
                 sys.stderr.write(f"Failed to send direct download command '{title}': {send_cmd_err}\n")
                 sys.exit(1)
@@ -479,7 +502,7 @@ async def search_and_download(title: str) -> None:
 
         # Case 2: General text query search
         try:
-            query_msg = await send_msg_with_retry(title)
+            query_msg = await send_message_with_floodwait(app, target_channel, title)
         except Exception as send_title_err:
             sys.stderr.write(f"Failed to send query '{title}': {send_title_err}\n")
             sys.exit(1)
@@ -508,7 +531,7 @@ async def search_and_download(title: str) -> None:
             cmd_match = re.search(r"/(?:download|get|dl|d)_?[a-zA-Z0-9_]+", msg_text)
             if cmd_match:
                 dl_cmd = cmd_match.group(0)
-                sub_cmd_msg = await app.send_message(target_channel, dl_cmd)
+                sub_cmd_msg = await send_message_with_floodwait(app, target_channel, dl_cmd)
                 resp_msg = await wait_for_document_or_response(app, target_channel, sub_cmd_msg.id, timeout_seconds=30)
 
         # Process document
