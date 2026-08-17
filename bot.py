@@ -15,6 +15,8 @@ import runtime_reporting
 import runtime_voting
 import runtime_menu
 import runtime_entry
+import runtime_suggest
+import runtime_commands
 
 runtime_ux.install()
 runtime_library.install()
@@ -22,6 +24,8 @@ runtime_reporting.install()
 runtime_voting.install()
 runtime_menu.install()
 runtime_entry.install()
+runtime_suggest.install()
+runtime_commands.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
