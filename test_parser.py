@@ -1,64 +1,38 @@
-import re
 import json
+import downloader
 
-def parse_library_response_blocks(raw_text: str, query_title: str) -> list[dict]:
-    blocks = []
-    # Split text by blank lines
-    raw_blocks = re.split(r"\n\s*\n", raw_text)
-    for block in raw_blocks:
-        lines = [line.strip() for line in block.splitlines() if line.strip()]
-        # Skip header/footer lines or prompt messages
-        filtered_lines = [
-            l for l in lines
-            if not any(w in l.lower() for w in [
-                "/start", "добро пожаловать", "приветствую", "найдено:",
-                "мы нашли именно то", "книга по вашему запросу", "поиск...", "идет поиск"
-            ])
-        ]
-        if not filtered_lines:
-            continue
+class DummyButton:
+    def __init__(self, text, callback_data):
+        self.text = text
+        self.callback_data = callback_data
 
-        # Find download command in block
-        dl_cmd = ""
-        non_cmd_lines = []
-        for l in filtered_lines:
-            cmd_m = re.search(r"/(?:download|get|dl|d)_[a_zA_Z0_9_]+|/download\d+", l)
-            if cmd_m:
-                dl_cmd = cmd_m.group(0)
-            else:
-                non_cmd_lines.append(l)
+query = "Толкин"
 
-        if non_cmd_lines:
-            raw_title = non_cmd_lines[0]
-            # Strip language tags like '- ru', '– ru', '[ru]', '(ru)', '- litres', etc.
-            clean_title = re.sub(r"\s*[-–—]?\s*(?:ru|en|litres|pdf|epub)\b.*$", "", raw_title, flags=re.IGNORECASE).strip()
-            if not clean_title:
-                clean_title = raw_title
+# Scenario 1: Intermediate message with button "Толкин"
+intermediate_text = "Поиск по запросу: Толкин..."
+intermediate_markup = [[DummyButton("Толкин", "search_tolkien")]]
 
-            author = ""
-            if len(non_cmd_lines) >= 3:
-                author = non_cmd_lines[-1]
-            elif len(non_cmd_lines) == 2:
-                author = non_cmd_lines[1]
-            elif " — " in clean_title or " - " in clean_title:
-                parts = re.split(r"\s+[—\-]\s+", clean_title, 1)
-                if len(parts) == 2:
-                    clean_title, author = parts[0].strip(), parts[1].strip()
+res_intermediate = downloader.parse_library_response(
+    msg_text=intermediate_text,
+    reply_markup=intermediate_markup,
+    query_title=query
+)
+print("Intermediate response parse result:", res_intermediate)
+assert res_intermediate == [], f"Expected [], got {res_intermediate}"
 
-            # Clean up author if it contains unwanted status text
-            if author and (author.startswith("(") or "скачать" in author.lower() or "найдено" in author.lower()):
-                author = ""
+# Scenario 2: Pagination buttons message (e.g. -1-, 2, 3, 4>, 40>)
+pagination_markup = [
+    [DummyButton("-1-", "page_1"), DummyButton("2", "page_2"), DummyButton("3", "page_3"), DummyButton("4>", "page_4"), DummyButton("40>", "page_40")]
+]
+res_pagination = downloader.parse_library_response(
+    msg_text="",
+    reply_markup=pagination_markup,
+    query_title=query
+)
+print("Pagination buttons parse result:", res_pagination)
+assert res_pagination == [], f"Expected [], got {res_pagination}"
 
-            blocks.append({
-                "title": clean_title,
-                "author": author if author else "Unknown Author",
-                "genre": "",
-                "download_cmd": dl_cmd,
-                "raw_label": f"{clean_title} — {author}" if author else clean_title
-            })
-
-    return blocks
-
+# Scenario 3: Full book card message
 sample_text = """Найдено: 200 книг
 
 Толкин и Великая война. На пороге Средиземья - ru
@@ -89,5 +63,11 @@ sample_text = """Найдено: 200 книг
 
 — Книга по вашему запросу ✅"""
 
-parsed = parse_library_response_blocks(sample_text, "Толкин")
+parsed = downloader.parse_library_response(msg_text=sample_text, query_title=query)
+print("Full card parse result:")
 print(json.dumps(parsed, ensure_ascii=False, indent=2))
+
+assert len(parsed) == 5
+assert parsed[0]["title"] == "Толкин и Великая война. На пороге Средиземья"
+assert parsed[0]["author"] == "Джон Гарт"
+assert parsed[0]["download_cmd"] == "/download682541"
