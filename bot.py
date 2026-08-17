@@ -193,11 +193,19 @@ poll_votes_tracker: Dict[str, Dict[int, int]] = {}
 # Process-local locks to prevent parallel downloading of the same book in the same chat
 download_locks: Dict[Tuple[int, int], asyncio.Lock] = {}
 
+# Process-local locks to prevent concurrent duplicate execution of finish_vote_process per chat
+finish_vote_locks: Dict[int, asyncio.Lock] = {}
+
 def get_download_lock(chat_id: int, book_id: int) -> asyncio.Lock:
     key = (chat_id, book_id)
     if key not in download_locks:
         download_locks[key] = asyncio.Lock()
     return download_locks[key]
+
+def get_finish_vote_lock(chat_id: int) -> asyncio.Lock:
+    if chat_id not in finish_vote_locks:
+        finish_vote_locks[chat_id] = asyncio.Lock()
+    return finish_vote_locks[chat_id]
 
 
 # --- Handlers ---
@@ -1027,109 +1035,148 @@ async def handle_finish_vote_cmd(message: Message):
 
 
 async def finish_vote_process(chat_id: int):
-    lang = await database.get_effective_language(DATABASE_PATH, chat_id)
-    active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
-    if not active_poll:
-        await bot.send_message(chat_id, t("no_active_vote_err", lang))
+    lock = get_finish_vote_lock(chat_id)
+    if lock.locked():
+        logger.info(f"finish_vote_process already running for chat {chat_id}. Skipping duplicate execution.")
         return
 
-    poll_message_id = active_poll["message_id"]
-    options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
-    voting_book_ids = list(options_mapping.values())
+    async with lock:
+        lang = await database.get_effective_language(DATABASE_PATH, chat_id)
+        active_poll = await database.get_active_poll(DATABASE_PATH, chat_id)
+        if not active_poll:
+            await bot.send_message(chat_id, t("no_active_vote_err", lang))
+            return
 
-    try:
-        stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
+        poll_message_id = active_poll["message_id"]
+        options_mapping: Dict[int, int] = {int(k): v for k, v in json.loads(active_poll["options_json"]).items()}
+        voting_book_ids = list(options_mapping.values())
 
-        max_votes = -1
-        winning_option_idx = 0
-        for idx, option in enumerate(stopped_poll.options):
-            if option.voter_count > max_votes:
-                max_votes = option.voter_count
-                winning_option_idx = idx
+        try:
+            stopped_poll: Poll = await bot.stop_poll(chat_id, poll_message_id)
 
-        winning_book_id = options_mapping.get(winning_option_idx, voting_book_ids[0])
-    except Exception as e:
-        logger.error(f"Error stopping poll in chat {chat_id}: {e}")
-        winning_book_id = voting_book_ids[0]
+            max_votes = -1
+            winning_option_idx = 0
+            for idx, option in enumerate(stopped_poll.options):
+                if option.voter_count > max_votes:
+                    max_votes = option.voter_count
+                    winning_option_idx = idx
 
-    await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
-    await database.clear_active_poll(DATABASE_PATH, chat_id)
+            winning_book_id = options_mapping.get(winning_option_idx, voting_book_ids[0])
+        except Exception as e:
+            logger.error(f"Error stopping poll in chat {chat_id}: {e}")
+            winning_book_id = voting_book_ids[0]
 
-    winning_book = await database.get_book_by_id(DATABASE_PATH, winning_book_id)
-    if not winning_book:
-        await bot.send_message(chat_id, "Error retrieving winning book details.")
-        return
+        await database.resolve_vote_winner(DATABASE_PATH, chat_id, winning_book_id, voting_book_ids)
+        await database.clear_active_poll(DATABASE_PATH, chat_id)
 
-    win_title = winning_book["title"]
-    win_author = winning_book["author"]
-    win_file_id = winning_book.get("file_id")
+        winning_book = await database.get_book_by_id(DATABASE_PATH, winning_book_id)
+        if not winning_book:
+            await bot.send_message(chat_id, "Error retrieving winning book details.")
+            return
 
-    await bot.send_message(
-        chat_id,
-        t("voting_ended_title", lang, title=win_title, author=win_author),
-        parse_mode="Markdown"
-    )
+        win_title = winning_book["title"]
+        win_author = winning_book["author"]
+        win_file_id = winning_book.get("file_id")
 
-    # Determine exact search query / download command
-    invalid_authors = {"unknown author", "library bot", "n/a", "none", ""}
-    clean_author = win_author.strip() if win_author else ""
-    if clean_author.lower() in invalid_authors:
-        clean_author = ""
+        await bot.send_message(
+            chat_id,
+            t("voting_ended_title", lang, title=win_title, author=win_author),
+            parse_mode="Markdown"
+        )
 
-    if win_file_id and win_file_id.strip().startswith("/"):
-        query_str = win_file_id.strip()
-    else:
-        query_str = f"{win_title} {clean_author}".strip() if clean_author else win_title.strip()
-
-    await execute_downloader_and_send(chat_id, winning_book_id, win_title, query_str, lang)
+        # Offload book downloading to background task so update handler completes immediately
+        asyncio.create_task(
+            execute_downloader_and_send(chat_id, winning_book_id, win_title, win_author, win_file_id, lang)
+        )
 
 
-async def execute_downloader_and_send(chat_id: int, book_id: int, book_title: str, query_str: str, lang: str):
+async def execute_downloader_and_send(
+    chat_id: int,
+    book_id: int,
+    book_title: str,
+    book_author: str,
+    saved_file_id: Optional[str],
+    lang: str
+):
     lock = get_download_lock(chat_id, book_id)
     if lock.locked():
         logger.info(f"Download already in progress for chat {chat_id}, book {book_id}. Skipping duplicate request.")
         return
 
     async with lock:
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "downloader.py",
-                "download",
-                query_str,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
+        invalid_authors = {"unknown author", "library bot", "n/a", "none", ""}
+        clean_author = book_author.strip() if book_author else ""
+        if clean_author.lower() in invalid_authors:
+            clean_author = ""
 
-            if proc.returncode == 0:
-                output_lines = stdout.decode().strip().splitlines()
-                file_path = output_lines[-1] if output_lines else ""
-                if os.path.exists(file_path):
-                    document = FSInputFile(file_path)
-                    msg = await bot.send_document(
-                        chat_id=chat_id,
-                        document=document,
-                        caption=t("book_file_caption", lang, title=book_title),
-                        parse_mode="Markdown"
-                    )
-                    file_id = msg.document.file_id if msg.document else ""
-                    await database.mark_book_done(DATABASE_PATH, book_id, file_id)
-
-                    try:
-                        os.remove(file_path)
-                    except Exception as ex:
-                        logger.warning(f"Could not remove local file {file_path}: {ex}")
-                else:
-                    await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
+        # Priority 1: Saved direct download command starting with /
+        if saved_file_id and saved_file_id.strip().startswith("/"):
+            queries = [saved_file_id.strip()]
+        else:
+            # Priority 2: Title + Author (if valid)
+            if clean_author:
+                queries = [f"{book_title.strip()} {clean_author}".strip(), book_title.strip()]
             else:
-                err_msg = stderr.decode().strip()
-                logger.error(f"Downloader failed for '{book_title}': {err_msg}")
-                await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
+                # Priority 3: Title only
+                queries = [book_title.strip()]
 
-        except Exception as e:
-            logger.error(f"Subprocess execution error: {e}")
-            await bot.send_message(chat_id, t("file_download_err", lang, title=book_title), parse_mode="Markdown")
+        success = False
+        last_error = ""
+
+        for query_str in queries:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "downloader.py",
+                    "download",
+                    query_str,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await proc.communicate()
+
+                if proc.returncode == 0:
+                    output_lines = stdout.decode().strip().splitlines()
+                    file_path = output_lines[-1] if output_lines else ""
+                    if os.path.exists(file_path):
+                        document = FSInputFile(file_path)
+                        msg = await bot.send_document(
+                            chat_id=chat_id,
+                            document=document,
+                            caption=t("book_file_caption", lang, title=book_title),
+                            parse_mode="Markdown"
+                        )
+                        file_id = msg.document.file_id if msg.document else ""
+                        await database.mark_book_done(DATABASE_PATH, book_id, file_id)
+
+                        try:
+                            os.remove(file_path)
+                        except Exception as ex:
+                            logger.warning(f"Could not remove local file {file_path}: {ex}")
+
+                        success = True
+                        break
+                    else:
+                        last_error = "Downloaded file path not found locally"
+                else:
+                    last_error = stderr.decode().strip() or "Downloader process returned non-zero code"
+
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"Subprocess execution error for query '{query_str}': {e}")
+
+        if not success:
+            logger.error(f"Downloader failed for '{book_title}': {last_error}")
+            await bot.send_message(chat_id, t("file_not_found_in_lib", lang, title=book_title), parse_mode="Markdown")
+
+            # Report diagnostic error to superadmin without cancelling winner status
+            await notify_superadmin_error(
+                error_title="Book File Download Failed",
+                error_traceback=f"Last Error: {last_error}",
+                user_id=None,
+                chat_id=chat_id,
+                context_info=f"Book ID: {book_id} | Title: '{book_title}' | Author: '{book_author}' | Queries Tried: {queries}"
+            )
 
 
 # --- Hall of Fame & Post-Reading Rating Handlers ---

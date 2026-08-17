@@ -200,13 +200,27 @@ async def wait_for_document_or_response(app: Client, target_channel: Any, reques
     """Poll for new messages after request_msg_id until a document or relevant text/markup response is received."""
     start_time = asyncio.get_event_loop().time()
     while asyncio.get_event_loop().time() - start_time < timeout_seconds:
-        async for message in app.get_chat_history(target_channel, limit=10):
-            if message.id <= request_msg_id:
-                continue
-            msg_text = message.text or message.caption or ""
-            if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
-                continue
-            return message
+        try:
+            async for message in app.get_chat_history(target_channel, limit=10):
+                if message.id <= request_msg_id:
+                    continue
+                msg_text = message.text or message.caption or ""
+                if any(w in msg_text.lower() for w in ["/start", "добро пожаловать", "приветствую"]):
+                    continue
+                return message
+        except Exception as e:
+            err_str = str(e)
+            if "FloodWait" in err_str or "GetHistory" in err_str:
+                match = re.search(r"(\d+)\s*second", err_str, re.IGNORECASE)
+                wait_sec = int(match.group(1)) if match else 3
+                rem_time = timeout_seconds - (asyncio.get_event_loop().time() - start_time)
+                if wait_sec < rem_time:
+                    await asyncio.sleep(wait_sec)
+                    continue
+                else:
+                    break
+            else:
+                logging.warning(f"Error reading chat history: {e}")
         await asyncio.sleep(1)
     return None
 
@@ -267,10 +281,25 @@ async def search_and_download(title: str) -> None:
             except Exception as start_err:
                 logging.warning(f"Could not send /start to target {target_channel}: {start_err}")
 
+        # Helper for sending messages with FloodWait retry
+        async def send_msg_with_retry(text_val: str) -> Any:
+            for _ in range(3):
+                try:
+                    return await app.send_message(target_channel, text_val)
+                except Exception as ex:
+                    ex_str = str(ex)
+                    if "FloodWait" in ex_str:
+                        m = re.search(r"(\d+)\s*second", ex_str, re.IGNORECASE)
+                        w_sec = int(m.group(1)) if m else 3
+                        await asyncio.sleep(w_sec)
+                    else:
+                        raise ex
+            return await app.send_message(target_channel, text_val)
+
         # Case 1: Direct command starting with '/'
         if title.startswith("/"):
             try:
-                cmd_msg = await app.send_message(target_channel, title)
+                cmd_msg = await send_msg_with_retry(title)
             except Exception as send_cmd_err:
                 sys.stderr.write(f"Failed to send direct download command '{title}': {send_cmd_err}\n")
                 sys.exit(1)
@@ -292,7 +321,7 @@ async def search_and_download(title: str) -> None:
 
         # Case 2: General text query search
         try:
-            query_msg = await app.send_message(target_channel, title)
+            query_msg = await send_msg_with_retry(title)
         except Exception as send_title_err:
             sys.stderr.write(f"Failed to send query '{title}': {send_title_err}\n")
             sys.exit(1)
@@ -347,7 +376,9 @@ async def search_and_download(title: str) -> None:
 
 
 def main():
-    logging.getLogger("pyrogram").setLevel(logging.WARNING)
+    logging.getLogger("pyrogram").setLevel(logging.ERROR)
+    logging.getLogger("pyrogram.syncer").setLevel(logging.ERROR)
+    logging.getLogger("pyrogram.client").setLevel(logging.ERROR)
 
     if len(sys.argv) < 2:
         sys.stderr.write("Usage: python downloader.py <search|download> <book_title> OR python downloader.py <book_title>\n")
