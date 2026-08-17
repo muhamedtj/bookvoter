@@ -1,6 +1,6 @@
 """BookVoter application entrypoint.
 
-The existing implementation lives in :mod:`bot_core`.  This thin layer keeps the
+The existing implementation lives in :mod:`bot_core`. This thin layer keeps the
 stable core intact while we iterate on user-facing navigation and operational
 fixes without another large monolithic rewrite.
 """
@@ -22,13 +22,7 @@ def get_welcome_keyboard(
     is_private: bool = False,
     chat_id: Optional[int] = None,
 ):
-    """Public navigation.
-
-    The control panel is deliberately not shown in the common group keyboard:
-    inline keyboards are visible to every member of a Telegram group, so an
-    admin-only button cannot truly be rendered per viewer.  Administrators keep
-    access through /admin and /bookvoter.
-    """
+    """Build public navigation for group members and private-chat users."""
     if not is_private and chat_id and chat_id < 0:
         rate_url = f"https://t.me/{bot_username}?start=rate_c{abs(chat_id)}"
         keyboard = [
@@ -68,6 +62,53 @@ def get_welcome_keyboard(
 _core.get_welcome_keyboard = get_welcome_keyboard
 
 
+def _admin_status(status) -> bool:
+    """Normalize Telegram/aiogram admin status values."""
+    value = getattr(status, "value", status)
+    return str(value).lower() in {"creator", "owner", "administrator"}
+
+
+async def is_admin(chat_id: int, user_id: int) -> bool:
+    """Check group admin/owner status with a resilient administrators-list fallback."""
+    if user_id in _core.SUPER_ADMIN_IDS:
+        return True
+    if chat_id > 0:
+        return False
+
+    member_error = None
+    try:
+        member = await _core.bot.get_chat_member(chat_id, user_id)
+        if _admin_status(getattr(member, "status", None)):
+            return True
+    except Exception as exc:
+        member_error = exc
+
+    # get_chat_member can be unreliable for arbitrary members when the bot has
+    # limited group permissions. The administrators list is a better fallback
+    # for detecting the group's creator/owner and administrators.
+    try:
+        administrators = await _core.bot.get_chat_administrators(chat_id)
+        for admin_member in administrators:
+            admin_user = getattr(admin_member, "user", None)
+            if getattr(admin_user, "id", None) == user_id:
+                return True
+    except Exception as exc:
+        if member_error:
+            _core.logger.warning(
+                f"Admin check failed for user {user_id} in chat {chat_id}: "
+                f"get_chat_member={member_error}; get_chat_administrators={exc}"
+            )
+        else:
+            _core.logger.warning(
+                f"Failed to load administrators for user {user_id} in chat {chat_id}: {exc}"
+            )
+
+    return False
+
+
+_core.is_admin = is_admin
+
+
 async def notify_superadmin_error(
     error_title: str,
     error_traceback: str,
@@ -104,8 +145,6 @@ async def notify_superadmin_error(
 
     is_manual_report = error_title.startswith("User Error Report")
 
-    # Fallback only for an explicit user-initiated report. This avoids exposing
-    # internal exception tracebacks to administrators of tenant groups.
     if not delivered and is_manual_report and chat_id is not None and chat_id < 0:
         try:
             administrators = await _core.bot.get_chat_administrators(chat_id)
@@ -143,6 +182,158 @@ def _back_markup(lang: str):
     )
 
 
+async def _get_suggestor_display(book_id: int) -> str:
+    """Resolve the member who originally suggested a book."""
+    async with _core.database.open_db(_core.DATABASE_PATH) as db:
+        async with db.execute(
+            """
+            SELECT u.full_name, u.username
+            FROM books b
+            LEFT JOIN users u ON b.suggested_by = u.internal_id
+            WHERE b.id = ?
+            """,
+            (book_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+
+    if not row:
+        return ""
+
+    full_name, username = row
+    if full_name:
+        return _core.escape_html(full_name)
+    if username:
+        return _core.escape_html(f"@{username}")
+    return ""
+
+
+async def send_next_unrated_book(user_tg_id: int, target_msg_or_user, lang: str):
+    """Show the next private interest-rating card, including who suggested it."""
+    unrated_books = await _core.database.get_unrated_backlog_books_for_user(
+        _core.DATABASE_PATH, user_tg_id
+    )
+    if not unrated_books:
+        text = _core.t("all_caught_up_rating", lang)
+        if isinstance(target_msg_or_user, _core.Message):
+            await target_msg_or_user.answer(text, parse_mode="HTML")
+        elif isinstance(target_msg_or_user, _core.CallbackQuery):
+            await target_msg_or_user.message.edit_text(text, parse_mode="HTML")
+        return
+
+    book = unrated_books[0]
+    row1 = [
+        _core.InlineKeyboardButton(text=str(i), callback_data=f"rate:{book['id']}:{i}")
+        for i in range(1, 6)
+    ]
+    row2 = [
+        _core.InlineKeyboardButton(text=str(i), callback_data=f"rate:{book['id']}:{i}")
+        for i in range(6, 11)
+    ]
+    markup = _core.InlineKeyboardMarkup(inline_keyboard=[row1, row2])
+
+    msg_text = _core.t(
+        "rate_prompt_group",
+        lang,
+        chat_title=_core.escape_html(book["chat_title"]),
+        title=_core.escape_html(book["title"]),
+        author=_core.escape_html(book["author"]),
+    )
+
+    suggestor = await _get_suggestor_display(book["id"])
+    if suggestor:
+        suggested_label = _label(lang, en="Suggested by", ru="Предложил")
+        msg_text += f"\n\n👤 <b>{suggested_label}:</b> {suggestor}"
+
+    if isinstance(target_msg_or_user, _core.Message):
+        await target_msg_or_user.answer(msg_text, parse_mode="HTML", reply_markup=markup)
+    elif isinstance(target_msg_or_user, _core.CallbackQuery):
+        await target_msg_or_user.message.edit_text(msg_text, parse_mode="HTML", reply_markup=markup)
+
+
+_core.send_next_unrated_book = send_next_unrated_book
+
+
+async def send_halloffame_response(
+    chat_id: int,
+    lang: str,
+    target_msg_or_cb,
+    user_id: Optional[int] = None,
+):
+    """Render Hall of Fame with the original suggestor shown in parentheses."""
+    data = await _core.database.get_hall_of_fame_detailed(
+        _core.DATABASE_PATH,
+        chat_id,
+        min_votes=_core.MIN_VOTES_FOR_RATING,
+    )
+    qualified = data["qualified"]
+    low_votes = data["low_votes"]
+
+    if user_id is None:
+        source_user = getattr(target_msg_or_cb, "from_user", None)
+        if source_user is None and isinstance(target_msg_or_cb, _core.CallbackQuery):
+            source_user = target_msg_or_cb.from_user
+        user_id = getattr(source_user, "id", None)
+
+    user_is_admin = bool(user_id and await is_admin(chat_id, user_id))
+
+    markup = None
+    if user_is_admin and (qualified or low_votes):
+        markup = _core.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    _core.InlineKeyboardButton(
+                        text=_core.t("btn_hof_delete_book", lang),
+                        callback_data="hof_del_menu",
+                    )
+                ]
+            ]
+        )
+
+    if not qualified and not low_votes:
+        text = _core.t("hof_empty", lang)
+        if isinstance(target_msg_or_cb, _core.Message):
+            await target_msg_or_cb.answer(text, parse_mode="HTML")
+        elif isinstance(target_msg_or_cb, _core.CallbackQuery):
+            await target_msg_or_cb.message.edit_text(text, parse_mode="HTML")
+        return
+
+    async def append_book(text: str, idx: int, item: dict) -> str:
+        suggestor = await _get_suggestor_display(item["id"])
+        title = _core.escape_html(item["title"])
+        if suggestor:
+            title = f"{title} ({suggestor})"
+        return text + _core.t(
+            "hof_item_format",
+            lang,
+            idx=idx,
+            title=title,
+            author=_core.escape_html(item["author"]),
+            wr=item["weighted_rating"],
+            count=item["live_votes_count"],
+        ) + "\n"
+
+    text = _core.t("hof_header", lang)
+    if qualified:
+        for idx, item in enumerate(qualified, 1):
+            text = await append_book(text, idx, item)
+    else:
+        text += "—\n"
+
+    if low_votes:
+        text += _core.t(
+            "hof_low_votes_header",
+            lang,
+            min_votes=_core.MIN_VOTES_FOR_RATING,
+        )
+        for idx, item in enumerate(low_votes, 1):
+            text = await append_book(text, idx, item)
+
+    await _core.send_split_messages(target_msg_or_cb, text, reply_markup=markup)
+
+
+_core.send_halloffame_response = send_halloffame_response
+
+
 @_core.router.callback_query(_core.F.data == "show_backlog")
 async def _show_backlog(callback: _core.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -150,7 +341,11 @@ async def _show_backlog(callback: _core.CallbackQuery):
 
     if callback.message.chat.type == _core.ChatType.PRIVATE:
         await callback.answer(
-            _label(lang, en="Open this section in your book-club group.", ru="Откройте этот раздел в группе книжного клуба."),
+            _label(
+                lang,
+                en="Open this section in your book-club group.",
+                ru="Откройте этот раздел в группе книжного клуба.",
+            ),
             show_alert=True,
         )
         return
@@ -200,57 +395,22 @@ async def _show_hall_of_fame(callback: _core.CallbackQuery):
 
     if callback.message.chat.type == _core.ChatType.PRIVATE:
         await callback.answer(
-            _label(lang, en="Open this section in your book-club group.", ru="Откройте этот раздел в группе книжного клуба."),
+            _label(
+                lang,
+                en="Open this section in your book-club group.",
+                ru="Откройте этот раздел в группе книжного клуба.",
+            ),
             show_alert=True,
         )
         return
 
-    data = await _core.database.get_hall_of_fame_detailed(
-        _core.DATABASE_PATH,
-        chat_id,
-        min_votes=_core.MIN_VOTES_FOR_RATING,
-    )
-    qualified = data["qualified"]
-    low_votes = data["low_votes"]
     await callback.answer()
-
-    if not qualified and not low_votes:
-        await callback.message.edit_text(
-            _core.t("hof_empty", lang),
-            parse_mode="HTML",
-            reply_markup=_back_markup(lang),
-        )
-        return
-
-    text = _core.t("hof_header", lang)
-    if qualified:
-        for idx, item in enumerate(qualified, 1):
-            text += _core.t(
-                "hof_item_format",
-                lang,
-                idx=idx,
-                title=_core.escape_html(item["title"]),
-                author=_core.escape_html(item["author"]),
-                wr=item["weighted_rating"],
-                count=item["live_votes_count"],
-            ) + "\n"
-    else:
-        text += "—\n"
-
-    if low_votes:
-        text += _core.t("hof_low_votes_header", lang, min_votes=_core.MIN_VOTES_FOR_RATING)
-        for idx, item in enumerate(low_votes, 1):
-            text += _core.t(
-                "hof_item_format",
-                lang,
-                idx=idx,
-                title=_core.escape_html(item["title"]),
-                author=_core.escape_html(item["author"]),
-                wr=item["weighted_rating"],
-                count=item["live_votes_count"],
-            ) + "\n"
-
-    await _core.send_split_messages(callback, text, reply_markup=_back_markup(lang))
+    await send_halloffame_response(
+        chat_id,
+        lang,
+        target_msg_or_cb=callback,
+        user_id=callback.from_user.id,
+    )
 
 
 @_core.router.callback_query(_core.F.data == "show_suggest_help")
