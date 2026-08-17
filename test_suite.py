@@ -26,6 +26,49 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         btn2 = downloader.select_best_button(k2)
         self.assertEqual(btn2.text, "FB2")
 
+    def test_search_parsing_intermediate_button_scenario(self):
+        query_title = "Толкин"
+
+        # 1. Message 1: Intermediate prompt with button repeating "Толкин"
+        msg1_text = "Поиск по запросу: Толкин..."
+        msg1_buttons = [[DummyButton("Толкин", "search_tolkien")]]
+
+        res1 = downloader.parse_library_response(
+            msg_text=msg1_text,
+            reply_markup=msg1_buttons,
+            query_title=query_title
+        )
+        self.assertEqual(res1, [], "Intermediate prompt button 'Толкин' must be ignored and return empty results")
+
+        # Test pagination buttons in inline keyboard (e.g. -1-, 2, 3, 4>, 40>)
+        pagination_markup = [
+            [DummyButton("-1-", "page_1"), DummyButton("2", "page_2"), DummyButton("3", "page_3"), DummyButton("4>", "page_4"), DummyButton("40>", "page_40")]
+        ]
+        res_page = downloader.parse_library_response(
+            msg_text="",
+            reply_markup=pagination_markup,
+            query_title=query_title
+        )
+        self.assertEqual(res_page, [], "Pagination buttons must be ignored and return empty results")
+
+        # 2. Message 2: Full book card message
+        msg2_text = (
+            "Толкин и Великая война. На пороге Средиземья - ru\n"
+            "Толкин – творец Средиземья\n"
+            "Джон Гарт\n"
+            "Скачать книгу: /download682541"
+        )
+        res2 = downloader.parse_library_response(
+            msg_text=msg2_text,
+            reply_markup=None,
+            query_title=query_title
+        )
+        self.assertEqual(len(res2), 1)
+        self.assertEqual(res2[0]["title"], "Толкин и Великая война. На пороге Средиземья")
+        self.assertEqual(res2[0]["author"], "Джон Гарт")
+        self.assertEqual(res2[0]["download_cmd"], "/download682541")
+        self.assertNotEqual(res2[0]["title"], "Толкин")
+
     async def test_download_locks(self):
         lock1 = bot.get_download_lock(chat_id=100, book_id=1)
         lock2 = bot.get_download_lock(chat_id=100, book_id=1)
@@ -126,16 +169,50 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         audit_departed = await database.audit_backlog_activity(self.db_path, chat_id=-100, active_tg_ids=[])
         self.assertEqual(len(audit_departed), 2)
 
-    async def test_genre_rotation(self):
+    async def test_top_backlog_books_selection_logic(self):
+        # Setup previously read/won book (its genre must NOT affect selection now)
         b0_id = await database.add_book(self.db_path, chat_id=-100, title="Foundation", author="Isaac Asimov", genre="Sci-Fi")
         await database.update_books_status(self.db_path, [b0_id], "won")
 
+        # Setup backlog books
         b1_id = await database.add_book(self.db_path, chat_id=-100, title="Hyperion", author="Dan Simmons", genre="Sci-Fi")
         b2_id = await database.add_book(self.db_path, chat_id=-100, title="Name of the Wind", author="Patrick Rothfuss", genre="Fantasy")
+        b3_id = await database.add_book(self.db_path, chat_id=-100, title="Dune", author="Frank Herbert", genre="Sci-Fi")
+        b4_id = await database.add_book(self.db_path, chat_id=-100, title="1984", author="George Orwell", genre=None)
 
-        result = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=1)
-        self.assertEqual(result["books"][0]["id"], b2_id)
-        self.assertEqual(result["excluded_genre"], "Sci-Fi")
+        u1 = await database.get_or_create_user(self.db_path, tg_id=101, username="user1")
+        u2 = await database.get_or_create_user(self.db_path, tg_id=102, username="user2")
+
+        # Ratings:
+        # b1 (Hyperion, Sci-Fi): 10 & 8 -> Avg = 9.0
+        # b2 (Name of the Wind, Fantasy): 8 & 8 -> Avg = 8.0
+        # b3 (Dune, Sci-Fi): 8 & 8 -> Avg = 8.0
+        # b4 (1984, None): No ratings -> Avg = 0.0
+
+        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b1_id, score=10)
+        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b1_id, score=8)
+
+        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b2_id, score=8)
+        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b2_id, score=8)
+
+        await database.save_backlog_rating(self.db_path, tg_id=101, book_id=b3_id, score=8)
+        await database.save_backlog_rating(self.db_path, tg_id=102, book_id=b3_id, score=8)
+
+        top_books = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=3)
+        self.assertEqual(len(top_books), 3)
+
+        # 1st book: b1 (avg=9.0) despite b0 genre being Sci-Fi!
+        self.assertEqual(top_books[0]["id"], b1_id)
+        self.assertEqual(top_books[0]["avg_score"], 9.0)
+
+        # Tie-break check for avg=8.0 (b2_id vs b3_id sorted by id ASC):
+        self.assertEqual(top_books[1]["id"], b2_id)
+        self.assertEqual(top_books[2]["id"], b3_id)
+
+        # Check limit=4 to verify zero-rating book included last
+        all_top = await database.get_top_backlog_books_for_vote(self.db_path, chat_id=-100, limit=4)
+        self.assertEqual(all_top[3]["id"], b4_id)
+        self.assertEqual(all_top[3]["avg_score"], 0.0)
 
     async def test_superadmin_stats_detailed(self):
         u_id = await database.get_or_create_user(self.db_path, tg_id=2001, username="bob")

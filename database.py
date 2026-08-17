@@ -295,42 +295,6 @@ async def get_backlog_books_full_info(db_path: str, chat_id: int) -> List[Dict[s
             return [dict(r) for r in rows]
 
 
-async def get_available_genres_in_backlog(db_path: str, chat_id: int) -> List[str]:
-    """Get list of distinct non-empty genres present in a chat's backlog."""
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute("""
-            SELECT DISTINCT genre FROM books
-            WHERE chat_id = ? AND status = 'backlog' AND genre IS NOT NULL AND TRIM(genre) != ''
-            ORDER BY genre ASC
-        """, (chat_id,)) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
-
-
-async def get_backlog_books_by_genre(db_path: str, chat_id: int, genre: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Fetch backlog books optionally filtered by genre, sorted by average rating in descending order.
-    """
-    async with aiosqlite.connect(db_path) as db:
-        db.row_factory = aiosqlite.Row
-        base_query = """
-            SELECT b.id, b.chat_id, b.title, b.author, b.genre,
-                   COALESCE(AVG(r.score), 0) as avg_score,
-                   COUNT(r.score) as rating_count
-            FROM books b
-            LEFT JOIN backlog_ratings r ON b.id = r.book_id
-            WHERE b.chat_id = ? AND b.status = 'backlog'
-        """
-        params = [chat_id]
-        if genre and genre.lower() != "all":
-            base_query += " AND LOWER(b.genre) = LOWER(?)"
-            params.append(genre)
-
-        base_query += " GROUP BY b.id ORDER BY avg_score DESC, b.id ASC"
-
-        async with db.execute(base_query, params) as cursor:
-            rows = await cursor.fetchall()
-            return [dict(r) for r in rows]
 
 
 async def get_unrated_backlog_books_for_user(db_path: str, tg_id: int) -> List[Dict[str, Any]]:
@@ -404,50 +368,26 @@ async def update_hall_of_fame_rating(db_path: str, book_id: int, chat_id: int) -
         return {"avg_rating": avg_rating, "votes_count": votes_count}
 
 
-async def get_last_read_genre(db_path: str, chat_id: int) -> Optional[str]:
-    """Get genre of the most recently finished/won book in the chat."""
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute("""
-            SELECT genre FROM books
-            WHERE chat_id = ? AND status IN ('won', 'done') AND genre IS NOT NULL AND TRIM(genre) != ''
-            ORDER BY id DESC LIMIT 1
-        """, (chat_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else None
-
-
-async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> Dict[str, Any]:
+async def get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3) -> List[Dict[str, Any]]:
     """
-    Select top N backlog books based on average rating.
-    Excludes the genre of the previously read book if possible.
-    Returns dict containing 'books' list and 'excluded_genre' if applicable.
+    Select top N backlog books based on average interest score from backlog_ratings.
+    Ordered by avg_score DESC, b.id ASC.
     """
-    last_genre = await get_last_read_genre(db_path, chat_id)
-
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
-
-        base_query = """
+        query = """
             SELECT b.id, b.chat_id, b.title, b.author, b.genre,
                    COALESCE(AVG(r.score), 0) as avg_score,
                    COUNT(r.score) as rating_count
             FROM books b
             LEFT JOIN backlog_ratings r ON b.id = r.book_id
             WHERE b.chat_id = ? AND b.status = 'backlog'
+            GROUP BY b.id
+            ORDER BY avg_score DESC, b.id ASC
+            LIMIT ?
         """
-
-        if last_genre:
-            query = base_query + " AND (b.genre IS NULL OR LOWER(b.genre) != LOWER(?)) GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
-            async with db.execute(query, (chat_id, last_genre, limit)) as cursor:
-                results = [dict(r) for r in await cursor.fetchall()]
-                if len(results) >= limit:
-                    return {"books": results, "excluded_genre": last_genre}
-
-        # If not enough books excluding last_genre, fetch all backlog books
-        query = base_query + " GROUP BY b.id ORDER BY avg_score DESC, b.id ASC LIMIT ?"
         async with db.execute(query, (chat_id, limit)) as cursor:
-            results = [dict(r) for r in await cursor.fetchall()]
-            return {"books": results, "excluded_genre": None}
+            return [dict(r) for r in await cursor.fetchall()]
 
 
 async def update_books_status(db_path: str, book_ids: List[int], status: str) -> None:
@@ -754,23 +694,11 @@ async def get_superadmin_stats_detailed(db_path: str, days: Optional[int] = None
         """, params_ratings) as cursor:
             top_books = [{"title": r[0], "author": r[1], "score": round(r[2], 2)} for r in await cursor.fetchall()]
 
-        # Top genres by wish rating
-        async with db.execute(f"""
-            SELECT b.genre, COALESCE(AVG(r.score), 0) as avg_s
-            FROM books b
-            JOIN backlog_ratings r ON b.id = r.book_id
-            WHERE b.genre IS NOT NULL AND TRIM(b.genre) != ''
-            GROUP BY LOWER(b.genre)
-            ORDER BY avg_s DESC LIMIT 3
-        """, ()) as cursor:
-            top_genres = [{"genre": r[0], "score": round(r[1], 2)} for r in await cursor.fetchall()]
-
         return {
             "total_active_chats": total_active_chats,
             "total_voters": total_voters,
             "total_books_suggested": total_books_suggested,
-            "top_books": top_books,
-            "top_genres": top_genres
+            "top_books": top_books
         }
 
 
