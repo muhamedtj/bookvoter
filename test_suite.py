@@ -81,6 +81,13 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         # Mark book done is only called on successful download; test database state unchanged on failure
         book_after = await database.get_book_by_id(self.db_path, b_id)
         self.assertEqual(book_after["status"], "won")
+
+    async def test_fallback_router_for_group_messages(self):
+        # Verify fallback router exists and is registered after primary router
+        routers = bot.dp.sub_routers
+        self.assertGreaterEqual(len(routers), 2)
+        self.assertIs(routers[0], bot.router)
+        self.assertIs(routers[1], bot.fallback_router)
     async def asyncSetUp(self):
         self.db_path = "test_run.sqlite"
         if os.path.exists(self.db_path):

@@ -47,7 +47,9 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 scheduler = AsyncIOScheduler()
 router = Router()
+fallback_router = Router()
 dp.include_router(router)
+dp.include_router(fallback_router)
 
 
 # --- Error Notification Helper ---
@@ -1389,6 +1391,28 @@ async def handle_vote_book_callback(callback: CallbackQuery):
         await callback.message.edit_text(feedback_text, parse_mode="Markdown")
     except Exception as e:
         logger.warning(f"Could not edit message for vote_book feedback: {e}")
+
+
+# --- Explicit Fallback Handlers for Irrelevant Group Updates ---
+# Positioned on fallback_router, included after the primary router so commands,
+# callbacks, polls, and admin handlers are processed first.
+
+@fallback_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+async def handle_unhandled_group_messages(message: Message):
+    """Silently consume ordinary chat messages (text, photos, stickers, service msgs, etc.) in groups."""
+    pass
+
+
+@fallback_router.message_reaction()
+async def handle_ignored_message_reactions(event: Any):
+    """Silently consume message reaction updates without affecting bot state."""
+    pass
+
+
+@fallback_router.message_reaction_count()
+async def handle_ignored_message_reaction_counts(event: Any):
+    """Silently consume message reaction count updates without affecting bot state."""
+    pass
 
 
 async def main():
