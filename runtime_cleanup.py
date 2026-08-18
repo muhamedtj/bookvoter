@@ -1,8 +1,8 @@
 """BookVoter chat-cleanup hardening.
 
 This module is installed last and keeps cleanup collision-safe for future bots:
-BookVoter deletes only its own group commands, expires transient UI cards, and
-removes stale control-panel UI when a vote finishes.
+BookVoter deletes only its own group commands, expires transient UI cards after
+one minute of inactivity, and removes stale control-panel UI when a vote finishes.
 """
 
 from __future__ import annotations
@@ -13,7 +13,10 @@ import bot_core as core
 import runtime_ux as ux
 
 
-UI_TTL_SECONDS = 10 * 60
+# Product rule: navigation/control UI should not linger in the group. Every time
+# an active UI card is edited, its cleanup timer is re-armed, so this behaves as
+# an inactivity timeout rather than a hard one-minute lifetime while navigating.
+UI_TTL_SECONDS = 60
 OWN_GROUP_COMMANDS = {
     "/books",
     "/bookvoter",  # legacy alias
@@ -130,6 +133,7 @@ async def _message_edit_text_with_ui_ttl(self, text, *args, **kwargs):
     result = await _original_message_edit_text(self, text, *args, **kwargs)
     if self.chat.type in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
         if ux.active_ui_messages.get(self.chat.id) == self.message_id:
+            # Any navigation/edit is activity: start a fresh one-minute window.
             ux.schedule_message_delete(self.chat.id, self.message_id, UI_TTL_SECONDS)
     return result
 
@@ -147,7 +151,11 @@ async def _finish_vote_and_clear_ui(chat_id: int):
 async def _admin_panel_with_cleanup_status(chat_id: int, lang: str, db_path: str = core.DATABASE_PATH):
     text, markup = await _original_get_admin_panel_view(chat_id, lang, db_path=db_path)
     if await has_delete_permission(chat_id):
-        status = "🧹 <b>Очистка чата:</b> включена" if lang == "ru" else "🧹 <b>Chat cleanup:</b> enabled"
+        status = (
+            "🧹 <b>Очистка чата:</b> включена · UI удаляется через 1 мин бездействия"
+            if lang == "ru"
+            else "🧹 <b>Chat cleanup:</b> enabled · UI expires after 1 min of inactivity"
+        )
     else:
         status = (
             "⚠️ <b>Очистка команд:</b> нет права «Удаление сообщений»"
