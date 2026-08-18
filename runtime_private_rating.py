@@ -4,6 +4,11 @@ Repeated /start deep-links used to create multiple rating cards for the same
 book. A user could rate one card, while the stale duplicate remained clickable.
 This module keeps exactly one active BookVoter waiting-list card per user and
 reuses it as the user moves through unrated books.
+
+Private-chat navigation is callback-based: once the user is already in the bot,
+"Rate books" edits the current BookVoter card directly instead of opening a
+self-referential t.me deep link. Group buttons still use deep links because they
+must move the member from the group into the bot's private chat.
 """
 
 from __future__ import annotations
@@ -17,6 +22,8 @@ import runtime_ux as ux
 
 _installed = False
 _locks: dict[int, asyncio.Lock] = {}
+_base_welcome_keyboard = None
+_base_help_keyboard = None
 
 
 def _lock_for(user_id: int) -> asyncio.Lock:
@@ -136,7 +143,7 @@ async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any, lang:
         text, markup = await _render_payload(user_tg_id, lang)
         tracked_id = await _get_active_message_id(user_tg_id)
 
-        # Rating callbacks already come from a bot message. Reuse that exact
+        # Rating/menu callbacks already come from a bot message. Reuse that exact
         # message and delete another tracked duplicate, if one exists.
         if isinstance(target_msg_or_user, core.CallbackQuery):
             current_id = target_msg_or_user.message.message_id
@@ -173,9 +180,96 @@ async def send_next_unrated_book(user_tg_id: int, target_msg_or_user: Any, lang:
         await _set_active_message_id(user_tg_id, sent.message_id)
 
 
+def _private_welcome_keyboard(lang: str):
+    return core.InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                core.InlineKeyboardButton(
+                    text=core.t("btn_rate_books", lang),
+                    callback_data="rate_private",
+                )
+            ],
+            [
+                core.InlineKeyboardButton(
+                    text=core.t("btn_how_it_works", lang),
+                    callback_data="show_help",
+                )
+            ],
+            [
+                core.InlineKeyboardButton(
+                    text=core.t("btn_report_error", lang),
+                    callback_data="report_error_v2",
+                )
+            ],
+        ]
+    )
+
+
+def _welcome_keyboard(lang: str, bot_username: str, is_private: bool = False, chat_id=None):
+    if is_private or (chat_id is not None and int(chat_id) > 0):
+        return _private_welcome_keyboard(lang)
+    return _base_welcome_keyboard(
+        lang,
+        bot_username,
+        is_private=is_private,
+        chat_id=chat_id,
+    )
+
+
+def _help_keyboard(lang: str, bot_username: str, include_back: bool = True, chat_id=None):
+    if chat_id is not None and int(chat_id) > 0:
+        rows = [
+            [
+                core.InlineKeyboardButton(
+                    text=core.t("btn_rate_books", lang),
+                    callback_data="rate_private",
+                )
+            ],
+            [
+                core.InlineKeyboardButton(
+                    text=core.t("btn_report_error", lang),
+                    callback_data="report_error_v2",
+                )
+            ],
+        ]
+        if include_back:
+            rows.append([
+                core.InlineKeyboardButton(
+                    text=core.t("btn_back", lang),
+                    callback_data="back_to_welcome",
+                )
+            ])
+        return core.InlineKeyboardMarkup(inline_keyboard=rows)
+    return _base_help_keyboard(
+        lang,
+        bot_username,
+        include_back=include_back,
+        chat_id=chat_id,
+    )
+
+
+async def _rate_private(callback: core.CallbackQuery) -> None:
+    if callback.message.chat.type != core.ChatType.PRIVATE:
+        await callback.answer()
+        return
+    lang = await core.get_lang(callback.message.chat.id, callback.from_user.id)
+    await callback.answer()
+    await send_next_unrated_book(callback.from_user.id, callback, lang)
+
+
 def install() -> None:
-    global _installed
+    global _installed, _base_welcome_keyboard, _base_help_keyboard
     if _installed:
         return
     _installed = True
+
     core.send_next_unrated_book = send_next_unrated_book
+
+    # In private chat, use callbacks instead of t.me links to the same bot. This
+    # removes the fragile `/start` round-trip visible in Telegram Desktop.
+    _base_welcome_keyboard = core.get_welcome_keyboard
+    _base_help_keyboard = core.get_help_keyboard
+    core.get_welcome_keyboard = _welcome_keyboard
+    core.get_help_keyboard = _help_keyboard
+
+    core.router.callback_query(core.F.data == "rate_private")(_rate_private)
