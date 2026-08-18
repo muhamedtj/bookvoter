@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 
+import aiosqlite
+
 import bot_core as core
 import runtime_voting
 from runtime_ux import label
@@ -71,7 +73,7 @@ async def required_interest_ratings(chat_id: int) -> int:
 async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3):
     required = await required_interest_ratings(chat_id)
     async with core.database.open_db(db_path) as db:
-        db.row_factory = core.aiosqlite.Row
+        db.row_factory = aiosqlite.Row
         query = """
             SELECT b.id, b.chat_id, b.title, b.author, b.genre,
                    COALESCE(AVG(r.score), 0) AS avg_score,
