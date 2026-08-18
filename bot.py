@@ -23,6 +23,7 @@ import runtime_stage_pin
 import runtime_poll_pin
 import runtime_private_rating
 import runtime_suggest_events
+import runtime_vote_eligibility
 
 runtime_ux.install()
 runtime_library.install()
@@ -38,6 +39,7 @@ runtime_stage_pin.install()
 runtime_poll_pin.install()
 runtime_private_rating.install()
 runtime_suggest_events.install()
+runtime_vote_eligibility.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
