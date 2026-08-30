@@ -13,6 +13,7 @@ import re
 import unicodedata
 from typing import Any
 
+import aiosqlite
 import bot_core as core
 
 
@@ -42,8 +43,6 @@ def is_valid_book_record(book: dict[str, Any]) -> bool:
     title = _visible_text(book.get("title"))
     author = _visible_text(book.get("author"))
 
-    # A title must contain at least one real letter/number. This catches the
-    # observed U+200C-only library artifact without rejecting normal punctuation.
     if not title or not any(ch.isalnum() for ch in title):
         return False
 
@@ -51,8 +50,6 @@ def is_valid_book_record(book: dict[str, Any]) -> bool:
     if any(marker in combined for marker in _PROMO_MARKERS):
         return False
 
-    # Telegram handles inside the author field are almost always library ads,
-    # not bibliographic authors. Keep @ in titles untouched.
     if author and re.search(r"(?:^|\s)@[a-zA-Z0-9_]{4,}", author):
         return False
 
@@ -60,7 +57,7 @@ def is_valid_book_record(book: dict[str, Any]) -> bool:
 
 
 async def _quarantine_invalid_backlog(chat_id: int | None = None) -> int:
-    """Move only clearly malformed backlog rows out of the active lifecycle."""
+    """Move clearly malformed backlog rows out of the active lifecycle."""
     params: list[Any] = []
     where = "WHERE status = 'backlog'"
     if chat_id is not None:
@@ -68,7 +65,7 @@ async def _quarantine_invalid_backlog(chat_id: int | None = None) -> int:
         params.append(chat_id)
 
     async with core.database.open_db(core.DATABASE_PATH) as db:
-        db.row_factory = core.aiosqlite.Row
+        db.row_factory = aiosqlite.Row
         async with db.execute(
             f"SELECT id, title, author FROM books {where}",
             params,
@@ -111,7 +108,6 @@ async def _fetch_books_safe(query: str, lang: str = "en"):
 
 
 async def _get_unrated_safe(db_path: str, tg_id: int):
-    # One malformed historical row should never trap the private rating queue.
     await _quarantine_invalid_backlog()
     rows = await _original_get_unrated(db_path, tg_id)
     return [row for row in rows if is_valid_book_record(row)]
@@ -156,8 +152,6 @@ def install() -> None:
     _original_get_backlog = core.database.get_backlog_books_for_chat
     core.database.get_backlog_books_for_chat = _get_backlog_safe
 
-    # Installed after runtime_vote_eligibility so this wraps its quorum-aware
-    # selector instead of replacing it.
     _original_get_top = core.database.get_top_backlog_books_for_vote
     core.database.get_top_backlog_books_for_vote = _get_top_safe
 
