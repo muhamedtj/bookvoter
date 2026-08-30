@@ -25,6 +25,7 @@ import runtime_private_rating
 import runtime_suggest_events
 import runtime_vote_eligibility
 import runtime_pin_housekeeping
+import runtime_manual_suggestor
 
 runtime_ux.install()
 runtime_library.install()
@@ -42,6 +43,7 @@ runtime_private_rating.install()
 runtime_suggest_events.install()
 runtime_vote_eligibility.install()
 runtime_pin_housekeeping.install()
+runtime_manual_suggestor.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
