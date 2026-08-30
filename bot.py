@@ -27,6 +27,7 @@ import runtime_vote_eligibility
 import runtime_pin_housekeeping
 import runtime_manual_suggestor
 import runtime_persistent_suggestion_events
+import runtime_catalog_safety
 
 runtime_ux.install()
 runtime_library.install()
@@ -46,6 +47,7 @@ runtime_vote_eligibility.install()
 runtime_pin_housekeeping.install()
 runtime_manual_suggestor.install()
 runtime_persistent_suggestion_events.install()
+runtime_catalog_safety.install()
 
 if __name__ == "__main__":
     asyncio.run(core.main())
