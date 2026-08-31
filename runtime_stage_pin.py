@@ -3,6 +3,7 @@
 BookVoter keeps at most one of its own lifecycle messages pinned at a time:
 voting poll -> winner announcement -> downloaded book -> final rating/result.
 Only the tracked BookVoter pin is unpinned; unrelated group pins are never touched.
+Lifecycle history events such as the vote result stay in chat history.
 """
 
 from __future__ import annotations
@@ -129,8 +130,9 @@ async def set_stage_message(
 ) -> bool:
     """Move BookVoter's one tracked stage marker to a new message.
 
-    `delete_previous=False` is used when moving from the downloaded book to the
-    final-rating card: the book file remains in chat history but is unpinned.
+    `delete_previous=False` keeps the previous lifecycle event in chat history
+    while merely removing its pin. This is used for durable club-history events
+    such as a completed vote result and the downloaded book.
     """
     if chat_id >= 0:
         return False
@@ -186,8 +188,9 @@ async def _send_message_with_stage(self, *args, **kwargs):
             "🏆 <b>Выбрана следующая книга</b>",
             "🏆 <b>Next book selected</b>",
         )):
-            # The poll is now obsolete. Keep the winner visible only until the
-            # actual book file arrives.
+            # The live poll itself is obsolete once voting ends. Replace its pin
+            # with the result announcement. The result announcement is a durable
+            # club-history event and will remain when the book file arrives.
             await set_stage_message(chat_id, msg.message_id, "winner", delete_previous=True)
 
         elif chat_id < 0 and _has_final_rating_buttons(kwargs.get("reply_markup")):
@@ -205,9 +208,10 @@ async def _send_document_with_stage(self, *args, **kwargs):
         chat_id = int(getattr(getattr(msg, "chat", None), "id", kwargs.get("chat_id", 0)) or 0)
         caption = str(kwargs.get("caption") or "")
         if chat_id < 0 and caption.startswith(("📚 Ваша книга:", "📚 Here is your book:")):
-            # File replaces the temporary winner announcement as the current
-            # useful object for the club.
-            await set_stage_message(chat_id, msg.message_id, "reading", delete_previous=True)
+            # The file becomes the active pinned stage, but the completed vote
+            # result stays permanently in chat history so members can see what
+            # was chosen and why the file appeared.
+            await set_stage_message(chat_id, msg.message_id, "reading", delete_previous=False)
     except Exception as exc:
         core.logger.debug(f"Could not pin downloaded BookVoter book: {exc}")
     return msg
@@ -267,12 +271,12 @@ def _patch_help_copy() -> None:
         if ru and "закреп" not in ru.lower():
             i18n.STRINGS["help_msg"]["ru"] = ru + (
                 "\n\n📌 BookVoter автоматически закрепляет текущий этап: голосование → выбранную книгу → файл → итоговую оценку. "
-                "При переходе к следующему этапу старое закрепление снимается."
+                "При переходе к следующему этапу старое закрепление снимается, а итоги завершённого голосования остаются в истории чата."
             )
         if en and "pin" not in en.lower():
             i18n.STRINGS["help_msg"]["en"] = en + (
                 "\n\n📌 BookVoter automatically pins the current stage: vote → selected book → file → final rating. "
-                "The previous BookVoter pin is removed when the club advances."
+                "The previous BookVoter pin is removed when the club advances, while completed vote results remain in chat history."
             )
     except Exception as exc:
         core.logger.warning(f"Could not patch stage-pin help copy: {exc}")
