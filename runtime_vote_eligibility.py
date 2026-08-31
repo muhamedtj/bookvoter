@@ -19,6 +19,7 @@ from runtime_ux import label
 
 _installed = False
 _original_get_top = None
+VOTE_CANDIDATE_LIMIT = 5
 
 
 async def _estimated_human_members(chat_id: int) -> int:
@@ -45,7 +46,6 @@ async def _estimated_human_members(chat_id: int) -> int:
     except Exception as exc:
         core.logger.debug(f"Could not get Telegram member count for vote eligibility in {chat_id}: {exc}")
 
-    # Fallback to members BookVoter has observed.
     try:
         async with core.database.open_db(core.DATABASE_PATH) as db:
             async with db.execute(
@@ -59,18 +59,14 @@ async def _estimated_human_members(chat_id: int) -> int:
 
 
 async def required_interest_ratings(chat_id: int) -> int:
-    """Dynamic quorum: 25% of humans, min 3 and max 10.
-
-    Very small clubs are allowed to use all available humans instead of being
-    permanently blocked by the minimum of three.
-    """
+    """Dynamic quorum: 25% of humans, min 3 and max 10."""
     humans = await _estimated_human_members(chat_id)
     if humans <= 2:
         return max(1, humans)
     return min(10, max(3, math.ceil(humans * 0.25)))
 
 
-async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = 3):
+async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = VOTE_CANDIDATE_LIMIT):
     required = await required_interest_ratings(chat_id)
     async with core.database.open_db(db_path) as db:
         db.row_factory = aiosqlite.Row
@@ -93,8 +89,6 @@ async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int
         raw_title = item["title"]
         item["raw_title"] = raw_title
         item["min_ratings_required"] = required
-        # Keep the raw average visible, but also expose the sample size so users
-        # can immediately see how trustworthy the pre-vote score is.
         item["title"] = (
             f"⭐ {float(item['avg_score']):.1f}/10 · "
             f"👥 {int(item['rating_count'])} · {raw_title}"
@@ -117,7 +111,7 @@ async def _validate_vote_ready(chat_id: int, lang: str):
     top_books = await core.database.get_top_backlog_books_for_vote(
         core.DATABASE_PATH,
         chat_id,
-        limit=3,
+        limit=VOTE_CANDIDATE_LIMIT,
     )
     if len(top_books) >= 2:
         return True, "", top_books
@@ -165,12 +159,12 @@ def _patch_copy() -> None:
         en = i18n.STRINGS.get("help_msg", {}).get("en", "")
         if ru and "порог" not in ru.lower():
             i18n.STRINGS["help_msg"]["ru"] = ru + (
-                "\n\n📊 В голосование попадают только книги, набравшие достаточный порог оценок интереса: "
+                "\n\n📊 В голосование попадают до 5 лучших книг, набравших достаточный порог оценок интереса: "
                 "25% участников клуба, минимум 3 и максимум 10 оценок. Это защищает рейтинг от перекоса одной оценкой."
             )
         if en and "25%" not in en:
             i18n.STRINGS["help_msg"]["en"] = en + (
-                "\n\n📊 A book enters the vote only after reaching the interest-rating quorum: "
+                "\n\n📊 Up to 5 top books enter the vote after reaching the interest-rating quorum: "
                 "25% of club members, minimum 3 and maximum 10 ratings. This prevents one rating from skewing selection."
             )
     except Exception as exc:
@@ -185,10 +179,8 @@ def install() -> None:
 
     _original_get_top = core.database.get_top_backlog_books_for_vote
     core.database.get_top_backlog_books_for_vote = _get_top_backlog_books_for_vote
-
-    # runtime_voting resolves this module-global function at callback execution,
-    # so replacing it also improves public/admin vote-request error messages.
     runtime_voting._validate_vote_ready = _validate_vote_ready
 
     core.required_interest_ratings = required_interest_ratings
+    core.VOTE_CANDIDATE_LIMIT = VOTE_CANDIDATE_LIMIT
     _patch_copy()
