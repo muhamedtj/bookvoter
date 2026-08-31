@@ -100,8 +100,6 @@ async def _set_stage_message_with_housekeeping(
 ) -> bool:
     current = await stagepin._get_stage_message(chat_id)
     if current and current.get("message_id") != message_id:
-        # Remove the service row belonging to the old pin before that lifecycle
-        # message is unpinned/deleted. This prevents "pinned Deleted message".
         await cleanup_pin_service_messages(chat_id, int(current["message_id"]))
 
     result = await _original_set_stage_message(
@@ -111,8 +109,6 @@ async def _set_stage_message_with_housekeeping(
         delete_previous=delete_previous,
     )
 
-    # Also retry any older BookVoter service rows that could not be removed at
-    # the moment they were generated (for example before Delete Messages was granted).
     await cleanup_pin_service_messages(chat_id)
     return result
 
@@ -133,19 +129,15 @@ class _PinServiceCleanupMiddleware(BaseMiddleware):
         finally:
             chat = getattr(event, "chat", None)
             pinned = getattr(event, "pinned_message", None)
-            actor = getattr(event, "from_user", None)
             if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP) or not pinned:
                 return
 
-            try:
-                me = await core.bot.get_me()
-            except Exception:
-                return
-
-            # Do not touch pin events created by human admins or other bots.
-            if not actor or actor.id != me.id:
-                return
-
+            # Telegram does not consistently expose the pin-service actor as the
+            # bot that called pinChatMessage. Ownership is therefore determined
+            # by the pinned target itself: only a message currently tracked as a
+            # BookVoter lifecycle stage qualifies. This cannot match unrelated
+            # human/admin pins because their target message id is not in
+            # stage_messages for BookVoter.
             current = await stagepin._get_stage_message(chat.id)
             if not current or int(current["message_id"]) != int(pinned.message_id):
                 return
@@ -164,11 +156,9 @@ def install() -> None:
     _original_set_stage_message = stagepin.set_stage_message
     _original_clear_stage_message = stagepin.clear_stage_message
 
-    # stage_pin's lifecycle hooks resolve these module globals at execution time.
     stagepin.set_stage_message = _set_stage_message_with_housekeeping
     stagepin.clear_stage_message = _clear_stage_message_with_housekeeping
 
-    # runtime_poll_pin calls core.set_stage_message, so keep that reference aligned.
     core.set_stage_message = _set_stage_message_with_housekeeping
     core.clear_stage_message = _clear_stage_message_with_housekeeping
     core.cleanup_pin_service_messages = cleanup_pin_service_messages
