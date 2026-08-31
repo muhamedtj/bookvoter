@@ -66,8 +66,24 @@ async def required_interest_ratings(chat_id: int) -> int:
     return min(10, max(3, math.ceil(humans * 0.25)))
 
 
+def _effective_vote_limit(limit: int | None) -> int:
+    """Never allow legacy callers to shrink the main vote below the product limit.
+
+    Some older BookVoter handlers still explicitly call the selector with
+    ``limit=3``.  The selector is the single source of truth, so enforcing the
+    minimum here makes every launch path (admin, public request, auto-launch)
+    use up to five fresh eligible books after additions/deletions.
+    """
+    try:
+        requested = int(limit) if limit is not None else VOTE_CANDIDATE_LIMIT
+    except (TypeError, ValueError):
+        requested = VOTE_CANDIDATE_LIMIT
+    return max(VOTE_CANDIDATE_LIMIT, requested)
+
+
 async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int = VOTE_CANDIDATE_LIMIT):
     required = await required_interest_ratings(chat_id)
+    effective_limit = _effective_vote_limit(limit)
     async with core.database.open_db(db_path) as db:
         db.row_factory = aiosqlite.Row
         query = """
@@ -79,10 +95,10 @@ async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int
             WHERE b.chat_id = ? AND b.status = 'backlog'
             GROUP BY b.id
             HAVING COUNT(r.score) >= ?
-            ORDER BY avg_score DESC, rating_count DESC, b.id ASC
+            ORDER BY rating_count DESC, avg_score DESC, b.id ASC
             LIMIT ?
         """
-        async with db.execute(query, (chat_id, required, limit)) as cursor:
+        async with db.execute(query, (chat_id, required, effective_limit)) as cursor:
             rows = [dict(r) for r in await cursor.fetchall()]
 
     for item in rows:
@@ -90,8 +106,8 @@ async def _get_top_backlog_books_for_vote(db_path: str, chat_id: int, limit: int
         item["raw_title"] = raw_title
         item["min_ratings_required"] = required
         item["title"] = (
-            f"⭐ {float(item['avg_score']):.1f}/10 · "
-            f"👥 {int(item['rating_count'])} · {raw_title}"
+            f"👥 {int(item['rating_count'])} · "
+            f"⭐ {float(item['avg_score']):.1f}/10 · {raw_title}"
         )
     return rows
 
@@ -160,12 +176,12 @@ def _patch_copy() -> None:
         if ru and "порог" not in ru.lower():
             i18n.STRINGS["help_msg"]["ru"] = ru + (
                 "\n\n📊 В голосование попадают до 5 лучших книг, набравших достаточный порог оценок интереса: "
-                "25% участников клуба, минимум 3 и максимум 10 оценок. Это защищает рейтинг от перекоса одной оценкой."
+                "25% участников клуба, минимум 3 и максимум 10 оценок. Приоритет — большее число оценивших, затем средняя оценка."
             )
         if en and "25%" not in en:
             i18n.STRINGS["help_msg"]["en"] = en + (
                 "\n\n📊 Up to 5 top books enter the vote after reaching the interest-rating quorum: "
-                "25% of club members, minimum 3 and maximum 10 ratings. This prevents one rating from skewing selection."
+                "25% of club members, minimum 3 and maximum 10 ratings. More raters rank first, then average score."
             )
     except Exception as exc:
         core.logger.warning(f"Could not patch vote-eligibility copy: {exc}")
