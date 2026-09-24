@@ -564,21 +564,74 @@ async def clear_active_poll(db_path: str, chat_id: int) -> None:
         await db.commit()
 
 
-async def resolve_vote_winner(db_path: str, chat_id: int, winning_book_id: int, voting_book_ids: List[int]) -> None:
-    """
-    Mark winning_book_id as 'reading', and revert other voting_book_ids to 'backlog'.
+async def repair_reading_state(db_path: str, chat_id: int, preferred_book_id: Optional[int] = None) -> Dict[str, Any]:
+    """Ensure a club has at most one book with status='reading'.
+
+    If preferred_book_id is provided and is a reading book in the same chat,
+    it is preserved. Otherwise the newest reading book (highest id) is kept.
+    Every other stale reading row is returned to the backlog.
     """
     async with open_db(db_path) as db:
-        # Revert non-winners to backlog
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, title, author FROM books WHERE chat_id = ? AND status = 'reading' ORDER BY id DESC",
+            (chat_id,),
+        ) as cursor:
+            rows = [dict(r) for r in await cursor.fetchall()]
+
+        if len(rows) <= 1:
+            return {
+                "repaired": False,
+                "kept_book_id": rows[0]["id"] if rows else None,
+                "reset_book_ids": [],
+                "before_count": len(rows),
+            }
+
+        ids = [int(row["id"]) for row in rows]
+        keep_id = int(preferred_book_id) if preferred_book_id in ids else ids[0]
+        reset_ids = [book_id for book_id in ids if book_id != keep_id]
+        placeholders = ",".join("?" * len(reset_ids))
+        await db.execute(
+            f"UPDATE books SET status = 'backlog' WHERE chat_id = ? AND id IN ({placeholders}) AND status = 'reading'",
+            [chat_id] + reset_ids,
+        )
+        await db.commit()
+        return {
+            "repaired": True,
+            "kept_book_id": keep_id,
+            "reset_book_ids": reset_ids,
+            "before_count": len(rows),
+        }
+
+
+async def resolve_vote_winner(db_path: str, chat_id: int, winning_book_id: int, voting_book_ids: List[int]) -> None:
+    """Mark the winner as the club's only active reading book.
+
+    Any stale reading rows in the same club are returned to backlog first. This
+    keeps the lifecycle invariant: one chat can have at most one reading book.
+    """
+    async with open_db(db_path) as db:
         other_ids = [bid for bid in voting_book_ids if bid != winning_book_id]
         if other_ids:
             placeholders = ",".join("?" * len(other_ids))
-            await db.execute(f"UPDATE books SET status = 'backlog' WHERE id IN ({placeholders})", other_ids)
+            await db.execute(
+                f"UPDATE books SET status = 'backlog' WHERE chat_id = ? AND id IN ({placeholders})",
+                [chat_id] + other_ids,
+            )
 
-        # Set winner status to 'reading'
-        await db.execute("UPDATE books SET status = 'reading' WHERE id = ?", (winning_book_id,))
+        await db.execute(
+            "UPDATE books SET status = 'backlog' WHERE chat_id = ? AND status = 'reading' AND id != ?",
+            (chat_id, winning_book_id),
+        )
+
+        cursor = await db.execute(
+            "UPDATE books SET status = 'reading' WHERE id = ? AND chat_id = ?",
+            (winning_book_id, chat_id),
+        )
+        if cursor.rowcount != 1:
+            await db.rollback()
+            raise ValueError(f"Winning book {winning_book_id} does not belong to chat {chat_id}")
         await db.commit()
-
 
 async def mark_book_done(db_path: str, book_id: int, file_id: str) -> None:
     """Update book file_id without changing lifecycle status (remains 'reading')."""
