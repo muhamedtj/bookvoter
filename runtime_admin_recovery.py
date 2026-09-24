@@ -102,10 +102,11 @@ async def _cancel_reading(callback: CallbackQuery):
         return
 
     async with core.database.open_db(core.DATABASE_PATH) as db:
-        await db.execute(
-            "UPDATE books SET status = 'backlog' WHERE id = ? AND chat_id = ? AND status = 'reading'",
-            (current_book["id"], chat_id),
+        cursor = await db.execute(
+            "UPDATE books SET status = 'backlog' WHERE chat_id = ? AND status = 'reading'",
+            (chat_id,),
         )
+        reset_count = cursor.rowcount
         await db.commit()
 
     # Remove the current BookVoter lifecycle pin/message (typically the downloaded file)
@@ -116,7 +117,11 @@ async def _cancel_reading(callback: CallbackQuery):
         except Exception:
             pass
 
-    await callback.answer("Выбор книги отменён. Книга возвращена в Лист ожидания — можно запускать голосование заново." if lang == "ru" else "Selected book cancelled and returned to backlog. You can start voting again.", show_alert=True)
+    if lang == "ru":
+        notice = f"Выбор книги отменён. В Лист ожидания возвращено книг: {reset_count}. Можно запускать голосование заново."
+    else:
+        notice = f"Selected book cancelled. Returned to backlog: {reset_count}. You can start voting again."
+    await callback.answer(notice, show_alert=True)
     text, markup = await core.get_admin_panel_view(chat_id, lang)
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=markup)
 
