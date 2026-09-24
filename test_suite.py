@@ -10,6 +10,7 @@ import database
 import bot
 import downloader
 import i18n
+import runtime_usage_tracking as usage_tracking
 
 class DummyButton:
     def __init__(self, text, callback_data):
@@ -71,6 +72,7 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         if os.path.exists(self.db_path):
             os.remove(self.db_path)
         bot.DATABASE_PATH = self.db_path
+        usage_tracking._ready_db_path = None
         await database.init_db(self.db_path)
 
     async def asyncTearDown(self):
@@ -486,7 +488,82 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         btn_texts3 = [btn.text for row in kb3.inline_keyboard for btn in row]
         self.assertIn("🏆 Завершить чтение", btn_texts3)
 
-    # --- 9. Full Lifecycle Invariant Audit Test ---
+    # --- 9. Superadmin Usage Analytics & Reading-State Regression Tests ---
+    async def test_usage_tracking_backfills_history_and_counts_live_actions(self):
+        chat_id = -701
+        user_id = 1701
+        await database.register_or_update_chat(self.db_path, chat_id, "Usage Analytics Club")
+        await database.record_chat_member(self.db_path, chat_id, user_id)
+        book_id = await database.add_book(
+            self.db_path,
+            chat_id,
+            "Usage Book",
+            "Author",
+            suggested_by_tg_id=user_id,
+        )
+        await database.save_backlog_rating(self.db_path, user_id, book_id, 9)
+
+        # First analytics initialization should backfill the existing suggestion
+        # and interest rating, then precise live events are added normally.
+        await usage_tracking._ensure_tables()
+        await usage_tracking.record_usage_event(chat_id, user_id, "menu_opened")
+
+        rows = await usage_tracking._club_usage_rows()
+        row = next(item for item in rows if int(item["chat_id"]) == chat_id)
+        self.assertEqual(row["title"], "Usage Analytics Club")
+        self.assertEqual(int(row["books_total"]), 1)
+        self.assertGreaterEqual(int(row["actions_all"]), 3)
+        self.assertGreaterEqual(int(row["active_users_30"]), 1)
+
+        breakdown = dict(await usage_tracking._event_breakdown(chat_id, "all"))
+        self.assertEqual(breakdown.get("book_suggested"), 1)
+        self.assertEqual(breakdown.get("interest_rated"), 1)
+        self.assertEqual(breakdown.get("menu_opened"), 1)
+
+    async def test_repair_reading_state_keeps_only_newest_book(self):
+        chat_id = -702
+        ids = [
+            await database.add_book(self.db_path, chat_id, f"Reading {idx}", "Author")
+            for idx in range(1, 4)
+        ]
+        await database.update_books_status(self.db_path, ids, "reading")
+
+        repair = await database.repair_reading_state(self.db_path, chat_id)
+        self.assertTrue(repair["repaired"])
+        self.assertEqual(repair["kept_book_id"], ids[-1])
+        self.assertEqual(set(repair["reset_book_ids"]), set(ids[:-1]))
+
+        statuses = {
+            book_id: (await database.get_book_by_id(self.db_path, book_id))["status"]
+            for book_id in ids
+        }
+        self.assertEqual(statuses[ids[-1]], "reading")
+        self.assertEqual(statuses[ids[0]], "backlog")
+        self.assertEqual(statuses[ids[1]], "backlog")
+
+    async def test_new_vote_winner_clears_stale_reading_state(self):
+        chat_id = -703
+        stale_id = await database.add_book(self.db_path, chat_id, "Old Reading", "Author")
+        b1_id = await database.add_book(self.db_path, chat_id, "Candidate 1", "Author")
+        b2_id = await database.add_book(self.db_path, chat_id, "Candidate 2", "Author")
+        await database.update_books_status(self.db_path, [stale_id], "reading")
+        await database.update_books_status(self.db_path, [b1_id, b2_id], "voting")
+
+        await database.resolve_vote_winner(
+            self.db_path,
+            chat_id,
+            winning_book_id=b2_id,
+            voting_book_ids=[b1_id, b2_id],
+        )
+
+        stale = await database.get_book_by_id(self.db_path, stale_id)
+        b1 = await database.get_book_by_id(self.db_path, b1_id)
+        b2 = await database.get_book_by_id(self.db_path, b2_id)
+        self.assertEqual(stale["status"], "backlog")
+        self.assertEqual(b1["status"], "backlog")
+        self.assertEqual(b2["status"], "reading")
+
+    # --- 10. Full Lifecycle Invariant Audit Test ---
     async def test_full_lifecycle_invariant_audit(self):
         chat_id = -10099
         user1, user2, user3 = 101, 102, 103
