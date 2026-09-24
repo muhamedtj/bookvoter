@@ -9,6 +9,7 @@ import asyncio
 import sys
 
 import bot_core as core
+import runtime_usage_tracking
 import runtime_ux
 import runtime_library
 import runtime_reporting
@@ -32,6 +33,7 @@ import runtime_admin_recovery
 import runtime_interest_ranking
 import runtime_vote_result_message
 
+runtime_usage_tracking.install()
 runtime_ux.install()
 runtime_library.install()
 runtime_reporting.install()
