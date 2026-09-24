@@ -1752,7 +1752,9 @@ async def recover_active_polls():
                 await db.execute("UPDATE books SET status = 'backlog' WHERE chat_id = ? AND status = 'voting'", (chat_id,))
                 await db.commit()
 
-        # Startup consistency check for multiple 'reading' books per chat
+        # Startup consistency repair for multiple 'reading' books per chat.
+        # Keep the newest reading book (same rule used by get_current_reading_book)
+        # and safely return all stale reading rows to backlog.
         async with db.execute("""
             SELECT chat_id, COUNT(*) as cnt
             FROM books
@@ -1763,10 +1765,16 @@ async def recover_active_polls():
             reading_inconsistencies = await cursor.fetchall()
 
         for c_id, cnt in reading_inconsistencies:
-            err_msg = f"Inconsistency detected: Group {c_id} has {cnt} books with status 'reading'."
-            logger.error(err_msg)
+            repair = await database.repair_reading_state(DATABASE_PATH, c_id)
+            kept = repair.get("kept_book_id")
+            reset_ids = repair.get("reset_book_ids") or []
+            err_msg = (
+                f"Inconsistency repaired: Group {c_id} had {cnt} books with status 'reading'. "
+                f"Kept book {kept}; returned {len(reset_ids)} stale books to backlog: {reset_ids}."
+            )
+            logger.warning(err_msg)
             await notify_superadmin_error(
-                error_title="Startup State Inconsistency",
+                error_title="Startup State Repaired",
                 error_traceback=err_msg,
                 chat_id=c_id
             )
