@@ -58,6 +58,8 @@ EVENT_LABELS_RU = {
     "recovery_action": "Восстановление состояния",
     "setting_changed": "Изменение настройки",
     "admin_action": "Действие администратора",
+    "bot_added": "Бот добавлен в клуб",
+    "bot_removed": "Бот удалён из клуба",
 }
 
 EVENT_LABELS_EN = {
@@ -87,6 +89,8 @@ EVENT_LABELS_EN = {
     "recovery_action": "Recovery action",
     "setting_changed": "Setting changed",
     "admin_action": "Admin action",
+    "bot_added": "Bot added to club",
+    "bot_removed": "Bot removed from club",
 }
 
 
@@ -338,17 +342,21 @@ class _UsageCallbackMiddleware(BaseMiddleware):
 
 class _UsagePollAnswerMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        active = None
+        try:
+            poll_id = getattr(event, "poll_id", None)
+            if poll_id:
+                # Resolve the club before the vote handler runs: a decisive vote
+                # may immediately finish the poll and clear active_polls.
+                active = await core.database.get_active_poll_by_poll_id(core.DATABASE_PATH, poll_id)
+        except Exception as exc:
+            core.logger.debug(f"Could not resolve poll club for usage tracking: {exc}")
+
         result = await handler(event, data)
         try:
             option_ids = list(getattr(event, "option_ids", None) or [])
-            if not option_ids:
-                return result
-            poll_id = getattr(event, "poll_id", None)
             user = getattr(event, "user", None)
-            if not poll_id:
-                return result
-            active = await core.database.get_active_poll_by_poll_id(core.DATABASE_PATH, poll_id)
-            if active:
+            if active and option_ids:
                 await record_usage_event(
                     int(active["chat_id"]),
                     getattr(user, "id", None),
@@ -357,6 +365,39 @@ class _UsagePollAnswerMiddleware(BaseMiddleware):
         except Exception as exc:
             core.logger.debug(f"Usage poll middleware skipped event: {exc}")
         return result
+
+
+async def _bot_membership_update(event) -> None:
+    try:
+        chat = getattr(event, "chat", None)
+        if not chat or chat.type not in (core.ChatType.GROUP, core.ChatType.SUPERGROUP):
+            return
+
+        old_member = getattr(event, "old_chat_member", None)
+        new_member = getattr(event, "new_chat_member", None)
+        old_status = getattr(getattr(old_member, "status", None), "value", getattr(old_member, "status", None))
+        new_status = getattr(getattr(new_member, "status", None), "value", getattr(new_member, "status", None))
+        old_status = str(old_status or "").lower()
+        new_status = str(new_status or "").lower()
+
+        inactive = {"left", "kicked"}
+        now_active = new_status not in inactive
+        title = getattr(chat, "title", None) or getattr(chat, "full_name", None)
+
+        await core.database.register_or_update_chat(
+            core.DATABASE_PATH,
+            chat.id,
+            title=title,
+            status="active" if now_active else "inactive",
+        )
+
+        actor = getattr(event, "from_user", None)
+        if old_status in inactive and now_active:
+            await record_usage_event(chat.id, getattr(actor, "id", None), "bot_added")
+        elif new_status in inactive and old_status not in inactive:
+            await record_usage_event(chat.id, getattr(actor, "id", None), "bot_removed")
+    except Exception as exc:
+        core.logger.debug(f"Could not update BookVoter club membership status: {exc}")
 
 
 async def _club_usage_rows() -> list[dict[str, Any]]:
@@ -415,6 +456,7 @@ async def _club_usage_rows() -> list[dict[str, Any]]:
             LEFT JOIN completed h ON h.chat_id = c.chat_id
             WHERE c.chat_id < 0
             ORDER BY
+                CASE WHEN COALESCE(c.status, 'active') = 'active' THEN 0 ELSE 1 END,
                 CASE WHEN e.last_activity IS NULL THEN 1 ELSE 0 END,
                 e.last_activity DESC,
                 title COLLATE NOCASE
@@ -462,19 +504,22 @@ def _filter_row(period: str, prefix: str, suffix: str = ""):
 async def _clubs_view(lang: str, period: str = "30", page: int = 0):
     rows = await _club_usage_rows()
     total = len(rows)
+    active_total = sum(1 for row in rows if str(row.get("status") or "active") == "active")
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(0, min(int(page), pages - 1))
     visible = rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
 
     if lang == "ru":
         text = (
-            f"🏘 <b>Клубы BookVoter</b> · {_period_label(lang, period)}\n\n"
+            f"🏘 <b>Клубы BookVoter</b> · {_period_label(lang, period)}\n"
+            f"🟢 Активных: <b>{active_total}</b> · Всего известных: <b>{total}</b>\n\n"
             "⚡ Считаются действия именно с BookVoter, а не обычные сообщения в группе.\n"
             "Исторические книги и оценки добавлены как базовые события; точный учёт кликов ведётся с момента включения мониторинга.\n\n"
         )
     else:
         text = (
-            f"🏘 <b>BookVoter clubs</b> · {_period_label(lang, period)}\n\n"
+            f"🏘 <b>BookVoter clubs</b> · {_period_label(lang, period)}\n"
+            f"🟢 Active: <b>{active_total}</b> · Known total: <b>{total}</b>\n\n"
             "⚡ Counts BookVoter interactions, not ordinary group chat messages.\n"
             "Historical books and ratings are backfilled as baseline events; precise click tracking starts when monitoring is enabled.\n\n"
         )
@@ -486,9 +531,11 @@ async def _clubs_view(lang: str, period: str = "30", page: int = 0):
     for index, row in enumerate(visible, page * PAGE_SIZE + 1):
         title = core.escape_html(str(row["title"]))
         actions = _period_actions(row, period)
+        status_icon = "🟢" if str(row.get("status") or "active") == "active" else "⚫"
+        status_text = ("активен" if str(row.get("status") or "active") == "active" else "отключён") if lang == "ru" else ("active" if str(row.get("status") or "active") == "active" else "inactive")
         if lang == "ru":
             text += (
-                f"<b>{index}. {title}</b>\n"
+                f"<b>{index}. {title}</b> · {status_icon} {status_text}\n"
                 f"🆔 <code>{row['chat_id']}</code>\n"
                 f"⚡ Действий: <b>{actions}</b> · 👤 активных за 30д: <b>{row['active_users_30']}</b>\n"
                 f"👥 Известно участников: <b>{row['known_members']}</b> · 📚 книг: <b>{row['books_total']}</b> · 🏆 завершено: <b>{row['completed_books']}</b>\n"
@@ -497,7 +544,7 @@ async def _clubs_view(lang: str, period: str = "30", page: int = 0):
             btn_text = f"📊 {str(row['title'])[:32]}"
         else:
             text += (
-                f"<b>{index}. {title}</b>\n"
+                f"<b>{index}. {title}</b> · {status_icon} {status_text}\n"
                 f"🆔 <code>{row['chat_id']}</code>\n"
                 f"⚡ Actions: <b>{actions}</b> · 👤 active in 30d: <b>{row['active_users_30']}</b>\n"
                 f"👥 Known members: <b>{row['known_members']}</b> · 📚 books: <b>{row['books_total']}</b> · 🏆 completed: <b>{row['completed_books']}</b>\n"
@@ -603,11 +650,12 @@ async def _club_detail_view(lang: str, chat_id: int, period: str, list_page: int
             f"<b>Events for {_period_label(lang, period)}:</b>\n{breakdown_text}"
         )
 
+    all_label = "Всё" if lang == "ru" else "All"
     keyboard = [
         [
-            core.InlineKeyboardButton(text=("✅ " if period == "7" else "") + "7д", callback_data=f"usage_club:{chat_id}:7:{list_page}"),
-            core.InlineKeyboardButton(text=("✅ " if period == "30" else "") + "30д", callback_data=f"usage_club:{chat_id}:30:{list_page}"),
-            core.InlineKeyboardButton(text=("✅ " if period == "all" else "") + "Всё", callback_data=f"usage_club:{chat_id}:all:{list_page}"),
+            core.InlineKeyboardButton(text=("✅ " if period == "7" else "") + ("7д" if lang == "ru" else "7d"), callback_data=f"usage_club:{chat_id}:7:{list_page}"),
+            core.InlineKeyboardButton(text=("✅ " if period == "30" else "") + ("30д" if lang == "ru" else "30d"), callback_data=f"usage_club:{chat_id}:30:{list_page}"),
+            core.InlineKeyboardButton(text=("✅ " if period == "all" else "") + all_label, callback_data=f"usage_club:{chat_id}:all:{list_page}"),
         ],
         [
             core.InlineKeyboardButton(
@@ -726,6 +774,10 @@ def install() -> None:
         core.router.poll_answer.outer_middleware(_UsagePollAnswerMiddleware())
     except Exception as exc:
         core.logger.warning(f"Could not install poll-answer usage tracking: {exc}")
+    try:
+        core.router.my_chat_member(_bot_membership_update)
+    except Exception as exc:
+        core.logger.warning(f"Could not install bot-membership usage tracking: {exc}")
 
     _original_superadmin_response = core.send_superadmin_response
     core.send_superadmin_response = _send_superadmin_response
