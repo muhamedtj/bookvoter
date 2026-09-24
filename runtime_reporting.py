@@ -63,6 +63,7 @@ async def _send_tracked_error_report(report_id,message,pending,description,attac
             try: await core.bot.copy_message(chat_id=admin_id,from_chat_id=message.chat.id,message_id=message.message_id)
             except Exception as exc: core.logger.warning(f"Failed to copy attachment for report #{report_id} to {admin_id}: {exc}")
     if not delivered: core.logger.error(f"Tracked report #{report_id} was saved but could not be delivered by DM.\n{report}")
+    return delivered
 
 async def _send_report_prompt_to_dm(user_id,pending,lang):
     prompt_text=label(lang,en="🐛 <b>Describe what went wrong</b>\n\nReply directly to this message with one message. You may attach a screenshot, file, video or voice message. I already saved the club and the BookVoter screen from which you opened the report.",ru="🐛 <b>Опишите, что пошло не так</b>\n\nОтветьте прямо на это сообщение одним сообщением. Можно приложить скриншот, файл, видео или голосовое. Клуб и экран BookVoter, с которого вы открыли отчёт, я уже сохранил.")
@@ -153,7 +154,14 @@ async def _capture_tracked_error_report(message: core.Message):
     if not description:
         if attachment_type!="none": description=label(lang,en="Attachment submitted without a text description.",ru="Вложение отправлено без текстового описания.")
         else: await message.answer(label(lang,en="Please add a short description or attach a screenshot.",ru="Добавьте короткое описание или приложите скриншот.")); return
-    report_id=await _save_error_report(message,pending,description,attachment_type,attachment_file_id); pending_error_reports.pop(user.id,None); await _send_tracked_error_report(report_id,message,pending,description,attachment_type); await message.answer(label(lang,en=f"✅ Report #{report_id} saved and sent. Thank you!",ru=f"✅ Отчёт #{report_id} сохранён и отправлен. Спасибо!"))
+    report_id=await _save_error_report(message,pending,description,attachment_type,attachment_file_id)
+    pending_error_reports.pop(user.id,None)
+    delivered=await _send_tracked_error_report(report_id,message,pending,description,attachment_type)
+    if delivered:
+        ack=label(lang,en=f"✅ Report #{report_id} saved and sent. Thank you!",ru=f"✅ Отчёт #{report_id} сохранён и отправлен. Спасибо!")
+    else:
+        ack=label(lang,en=f"⚠️ Report #{report_id} was saved, but I could not deliver it to the administrator in a private chat. The administrator must start the bot first and SUPER_ADMIN_IDS must contain their Telegram numeric ID.",ru=f"⚠️ Отчёт #{report_id} сохранён, но переслать его администратору в ЛС не удалось. Администратор должен сначала открыть бота и нажать Start, а в SUPER_ADMIN_IDS должен быть указан его числовой Telegram ID.")
+    await message.answer(ack)
 
 def install():
     global _installed
