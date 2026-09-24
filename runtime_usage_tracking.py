@@ -20,6 +20,7 @@ import bot_core as core
 
 _installed = False
 _original_superadmin_response = None
+_ready_db_path = None
 
 PAGE_SIZE = 5
 TRACKED_GROUP_COMMANDS = {
@@ -95,6 +96,11 @@ EVENT_LABELS_EN = {
 
 
 async def _ensure_tables() -> None:
+    global _ready_db_path
+    current_path = str(core.DATABASE_PATH)
+    if _ready_db_path == current_path:
+        return
+
     async with core.database.open_db(core.DATABASE_PATH) as db:
         await db.execute(
             """
@@ -192,6 +198,8 @@ async def _ensure_tables() -> None:
 
         await db.commit()
 
+    _ready_db_path = current_path
+
 
 async def record_usage_event(
     chat_id: int,
@@ -279,6 +287,10 @@ async def _book_chat_id(book_id: int) -> Optional[int]:
 
 class _UsageMessageMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        try:
+            await _ensure_tables()
+        except Exception as exc:
+            core.logger.debug(f"Could not prepare usage tracking before message: {exc}")
         result = await handler(event, data)
         try:
             chat = getattr(event, "chat", None)
@@ -311,6 +323,10 @@ class _UsageMessageMiddleware(BaseMiddleware):
 
 class _UsageCallbackMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        try:
+            await _ensure_tables()
+        except Exception as exc:
+            core.logger.debug(f"Could not prepare usage tracking before callback: {exc}")
         result = await handler(event, data)
         try:
             callback_data = getattr(event, "data", None) or ""
@@ -342,6 +358,10 @@ class _UsageCallbackMiddleware(BaseMiddleware):
 
 class _UsagePollAnswerMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
+        try:
+            await _ensure_tables()
+        except Exception as exc:
+            core.logger.debug(f"Could not prepare usage tracking before poll answer: {exc}")
         active = None
         try:
             poll_id = getattr(event, "poll_id", None)
@@ -487,18 +507,16 @@ def _short_time(value: Any) -> str:
     return raw[:16] + " UTC"
 
 
-def _filter_row(period: str, prefix: str, suffix: str = ""):
+def _filter_row(period: str, prefix: str, suffix: str = "", lang: str = "ru"):
     def button(code: str, text: str):
         mark = "✅ " if period == code else ""
         return core.InlineKeyboardButton(
             text=f"{mark}{text}",
             callback_data=f"{prefix}:{code}{suffix}",
         )
-    return [
-        button("7", "7д"),
-        button("30", "30д"),
-        button("all", "Всё"),
-    ]
+    if lang == "ru":
+        return [button("7", "7д"), button("30", "30д"), button("all", "Всё")]
+    return [button("7", "7d"), button("30", "30d"), button("all", "All")]
 
 
 async def _clubs_view(lang: str, period: str = "30", page: int = 0):
@@ -524,7 +542,7 @@ async def _clubs_view(lang: str, period: str = "30", page: int = 0):
             "Historical books and ratings are backfilled as baseline events; precise click tracking starts when monitoring is enabled.\n\n"
         )
 
-    keyboard = [_filter_row(period, "usage_clubs", f":{page}")]
+    keyboard = [_filter_row(period, "usage_clubs", f":{page}", lang=lang)]
 
     if not visible:
         text += "—"
@@ -775,7 +793,7 @@ def install() -> None:
     except Exception as exc:
         core.logger.warning(f"Could not install poll-answer usage tracking: {exc}")
     try:
-        core.router.my_chat_member(_bot_membership_update)
+        core.router.my_chat_member()(_bot_membership_update)
     except Exception as exc:
         core.logger.warning(f"Could not install bot-membership usage tracking: {exc}")
 
