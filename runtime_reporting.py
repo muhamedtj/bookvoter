@@ -40,8 +40,9 @@ async def _save_error_report(message,pending,description,attachment_type,attachm
         cursor=await db.execute("""INSERT INTO error_reports (user_tg_id,username,user_name,chat_id,chat_title,source_message_id,source_screen,description,attachment_type,attachment_file_id,status,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'open',CURRENT_TIMESTAMP)""",(user.id,user.username,user.full_name,pending.get("origin_chat_id"),pending.get("origin_chat_title"),pending.get("source_message_id"),pending.get("source_screen"),description,attachment_type,attachment_file_id)); await db.commit(); return cursor.lastrowid
 
 async def _manual_report_recipients(chat_id):
-    if core.SUPER_ADMIN_IDS: return list(dict.fromkeys(core.SUPER_ADMIN_IDS))
-    recipients=[]
+    # Always try explicitly configured superadmins first, but do not stop there:
+    # a stale/wrong SUPER_ADMIN_IDS entry must not block delivery to real club admins.
+    recipients=list(core.SUPER_ADMIN_IDS or [])
     if chat_id is not None and chat_id < 0:
         try:
             for member in await core.bot.get_chat_administrators(chat_id):
