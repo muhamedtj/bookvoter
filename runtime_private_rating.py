@@ -191,6 +191,12 @@ def _private_welcome_keyboard(lang: str):
             ],
             [
                 core.InlineKeyboardButton(
+                    text="🔎 Найти книгу" if lang == "ru" else "🔎 Find a book",
+                    callback_data="private_book_search",
+                )
+            ],
+            [
+                core.InlineKeyboardButton(
                     text=core.t("btn_how_it_works", lang),
                     callback_data="show_help",
                 )
