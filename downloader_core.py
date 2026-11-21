@@ -314,7 +314,6 @@ async def search_options_via_userbot(query_title: str) -> None:
         sys.exit(1)
 
     try:
-        # 1. Check if chat history is completely empty; send /start only once on initial session setup
         history_count = await check_history_with_floodwait(app, target_channel)
 
         if history_count == 0:
@@ -324,17 +323,19 @@ async def search_options_via_userbot(query_title: str) -> None:
             except Exception as ex:
                 logging.warning(f"Could not send /start: {ex}")
 
-        # 2. Send query directly with book title and save query_msg.id
         query_msg = await send_message_with_floodwait(app, target_channel, query_title)
 
         results = []
         start_time = asyncio.get_running_loop().time()
         timeout_seconds = 30
         poll_interval = 0.5
+        clicked_intermediate = set()
+        normalized_query = query_title.strip().casefold()
 
-        # 3. Poll new/updated library messages for up to 30 seconds
         while asyncio.get_running_loop().time() - start_time < timeout_seconds:
             candidate_results = []
+            intermediate_buttons = []
+
             try:
                 async for message in app.get_chat_history(target_channel, limit=15):
                     if message.id <= query_msg.id:
@@ -345,20 +346,58 @@ async def search_options_via_userbot(query_title: str) -> None:
                         for b in msg_books:
                             if not any(
                                 (r.get("download_cmd") and r["download_cmd"] == b.get("download_cmd"))
-                                or (r["title"].lower() == b["title"].lower() and r["author"].lower() == b["author"].lower())
+                                or (
+                                    r["title"].lower() == b["title"].lower()
+                                    and r["author"].lower() == b["author"].lower()
+                                )
                                 for r in candidate_results
                             ):
                                 candidate_results.append(b)
+                        continue
+
+                    # Some library bots first return an intermediate inline
+                    # "search/find" button (often with exactly the same text as
+                    # the user's query). The parser correctly does not treat it
+                    # as a book, but the search flow must press it to reach the
+                    # actual result list.
+                    markup = getattr(message, "reply_markup", None)
+                    rows = getattr(markup, "inline_keyboard", None) if markup else None
+                    if not rows:
+                        continue
+
+                    for row in rows:
+                        for btn in row:
+                            cb = (getattr(btn, "callback_data", None) or "").strip()
+                            txt = (getattr(btn, "text", None) or "").strip()
+                            cb_lower = cb.casefold()
+                            txt_lower = txt.casefold()
+
+                            if not cb:
+                                continue
+                            if cb_lower.startswith("page"):
+                                continue
+                            if "download" in cb_lower or cb.startswith("/"):
+                                continue
+                            if not (cb_lower.startswith("search") or cb_lower.startswith("find")):
+                                continue
+
+                            key = (message.id, cb)
+                            if key in clicked_intermediate:
+                                continue
+
+                            # Exact-query buttons are preferred. Generic
+                            # search/find buttons remain valid fallbacks.
+                            priority = 0 if txt_lower == normalized_query else 1
+                            intermediate_buttons.append((priority, message, cb, key))
+
             except FloodWait as fw:
                 await asyncio.sleep(fw.value)
             except Exception as poll_err:
                 logging.warning(f"Error while polling chat history: {poll_err}")
 
             if candidate_results:
-                # Settling delay to ensure the library bot finishes sending/editing the final message
                 await asyncio.sleep(1.5)
 
-                # Re-check chat history prioritizing the LATEST message (highest message.id)
                 latest_results = []
                 try:
                     async for message in app.get_chat_history(target_channel, limit=15):
@@ -367,16 +406,33 @@ async def search_options_via_userbot(query_title: str) -> None:
                         msg_books = parse_message_for_books(message, query_title)
                         if msg_books:
                             latest_results = msg_books
-                            break # Stop at the NEWEST message with valid books
+                            break
                 except Exception as check_err:
                     logging.warning(f"Error re-checking latest chat history: {check_err}")
 
                 results = (latest_results or candidate_results)[:5]
                 break
 
+            if intermediate_buttons:
+                intermediate_buttons.sort(key=lambda item: (item[0], -item[1].id))
+                _, message, cb, key = intermediate_buttons[0]
+                clicked_intermediate.add(key)
+                try:
+                    await app.request_callback_answer(
+                        chat_id=message.chat.id,
+                        message_id=message.id,
+                        callback_data=cb,
+                    )
+                    await asyncio.sleep(0.8)
+                    continue
+                except FloodWait as fw:
+                    await asyncio.sleep(fw.value)
+                    continue
+                except Exception as exc:
+                    logging.warning(f"Could not press intermediate search button: {exc}")
+
             await asyncio.sleep(poll_interval)
 
-        # Do NOT return fake fallback results on search failure/timeout
         print(json.dumps(results, ensure_ascii=False))
         sys.exit(0)
 
