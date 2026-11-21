@@ -23,6 +23,7 @@ import runtime_ratings
 import runtime_stage_pin
 import runtime_poll_pin
 import runtime_private_rating
+import runtime_private_search
 import runtime_suggest_events
 import runtime_vote_eligibility
 import runtime_pin_housekeeping
@@ -47,6 +48,7 @@ runtime_ratings.install()
 runtime_stage_pin.install()
 runtime_poll_pin.install()
 runtime_private_rating.install()
+runtime_private_search.install()
 runtime_suggest_events.install()
 runtime_vote_eligibility.install()
 runtime_pin_housekeeping.install()
