@@ -291,6 +291,38 @@ async def check_history_with_floodwait(app: Client, target_channel: Any) -> int:
     return 1
 
 
+def collect_intermediate_search_buttons(message: Any, query_title: str, clicked: set | None = None) -> list[tuple]:
+    """Return actionable library search/find buttons without treating them as books."""
+    clicked = clicked or set()
+    markup = getattr(message, "reply_markup", None)
+    rows = getattr(markup, "inline_keyboard", None) if markup else None
+    if not rows:
+        return []
+
+    normalized_query = (query_title or "").strip().casefold()
+    found = []
+    for row in rows:
+        for btn in row:
+            cb = (getattr(btn, "callback_data", None) or "").strip()
+            txt = (getattr(btn, "text", None) or "").strip()
+            cb_lower = cb.casefold()
+            if not cb or cb_lower.startswith("page"):
+                continue
+            if "download" in cb_lower or cb.startswith("/"):
+                continue
+            if not (cb_lower.startswith("search") or cb_lower.startswith("find")):
+                continue
+
+            key = (getattr(message, "id", None), cb)
+            if key in clicked:
+                continue
+
+            priority = 0 if txt.casefold() == normalized_query else 1
+            found.append((priority, cb, key))
+
+    return found
+
+
 async def search_options_via_userbot(query_title: str) -> None:
     if not API_ID or not API_HASH or not SESSION_STRING or not CHANNEL_ID:
         sys.stderr.write("Error: Missing required environment variables (API_ID, API_HASH, SESSION_STRING, CHANNEL_ID).\n")
@@ -330,7 +362,6 @@ async def search_options_via_userbot(query_title: str) -> None:
         timeout_seconds = 30
         poll_interval = 0.5
         clicked_intermediate = set()
-        normalized_query = query_title.strip().casefold()
 
         while asyncio.get_running_loop().time() - start_time < timeout_seconds:
             candidate_results = []
@@ -356,39 +387,14 @@ async def search_options_via_userbot(query_title: str) -> None:
                         continue
 
                     # Some library bots first return an intermediate inline
-                    # "search/find" button (often with exactly the same text as
-                    # the user's query). The parser correctly does not treat it
-                    # as a book, but the search flow must press it to reach the
-                    # actual result list.
-                    markup = getattr(message, "reply_markup", None)
-                    rows = getattr(markup, "inline_keyboard", None) if markup else None
-                    if not rows:
-                        continue
-
-                    for row in rows:
-                        for btn in row:
-                            cb = (getattr(btn, "callback_data", None) or "").strip()
-                            txt = (getattr(btn, "text", None) or "").strip()
-                            cb_lower = cb.casefold()
-                            txt_lower = txt.casefold()
-
-                            if not cb:
-                                continue
-                            if cb_lower.startswith("page"):
-                                continue
-                            if "download" in cb_lower or cb.startswith("/"):
-                                continue
-                            if not (cb_lower.startswith("search") or cb_lower.startswith("find")):
-                                continue
-
-                            key = (message.id, cb)
-                            if key in clicked_intermediate:
-                                continue
-
-                            # Exact-query buttons are preferred. Generic
-                            # search/find buttons remain valid fallbacks.
-                            priority = 0 if txt_lower == normalized_query else 1
-                            intermediate_buttons.append((priority, message, cb, key))
+                    # search/find button. Follow it, but never surface it as a
+                    # book result.
+                    for priority, cb, key in collect_intermediate_search_buttons(
+                        message,
+                        query_title,
+                        clicked_intermediate,
+                    ):
+                        intermediate_buttons.append((priority, message, cb, key))
 
             except FloodWait as fw:
                 await asyncio.sleep(fw.value)
