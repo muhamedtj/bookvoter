@@ -456,6 +456,37 @@ class TestBookVoter(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(res1, [])
 
+    def test_intermediate_search_button_is_actionable(self):
+        class Markup:
+            inline_keyboard = [[
+                DummyButton("Властелин колец", "search_lotr"),
+                DummyButton("2", "page_2"),
+            ]]
+
+        class Message:
+            id = 77
+            reply_markup = Markup()
+
+        buttons = downloader.collect_intermediate_search_buttons(
+            Message(),
+            "Властелин колец",
+            set(),
+        )
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(buttons[0][0], 0)
+        self.assertEqual(buttons[0][1], "search_lotr")
+        self.assertEqual(buttons[0][2], (77, "search_lotr"))
+
+        clicked = {(77, "search_lotr")}
+        self.assertEqual(
+            downloader.collect_intermediate_search_buttons(
+                Message(),
+                "Властелин колец",
+                clicked,
+            ),
+            [],
+        )
+
         pagination_markup = [
             [DummyButton("-1-", "page_1"), DummyButton("2", "page_2"), DummyButton("3", "page_3"), DummyButton("4>", "page_4"), DummyButton("40>", "page_40")]
         ]
